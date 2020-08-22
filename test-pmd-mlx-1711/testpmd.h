@@ -829,6 +829,9 @@ void mlx_fwreset(void*);
 int stop_forwarding_on_port_rmv(portid_t port_id,
 				enum rte_eth_event_type type,
 				void *param, void *ret_param);
+
+void add_rte_flows();
+
 /*
  * Work-around of a compilation error with ICC on invocations of the
  * rte_be_to_cpu_16() function.
@@ -847,7 +850,5 @@ int stop_forwarding_on_port_rmv(portid_t port_id,
 	(uint16_t) ((((cpu_16_v) & 0xFF) << 8) | ((cpu_16_v) >> 8))
 #endif
 #endif /* __GCC__ */
-
-void add_rte_flows();
 
 #endif /* _TESTPMD_H_ */
