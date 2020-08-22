@@ -29,6 +29,9 @@
 #   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 #   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+# Default target, detect a build directory, by looking for a path with a .config
+RTE_TARGET ?= $(notdir $(abspath $(dir $(firstword $(wildcard $(RTE_SDK)/*/.config)))))
+
 include $(RTE_SDK)/mk/rte.vars.mk
 
 #
@@ -101,5 +104,5 @@ endif
 
 CFLAGS_cmdline.o := -D_GNU_SOURCE
 
-include $(RTE_SDK)/mk/rte.app.mk
+include $(RTE_SDK)/mk/rte.extapp.mk
 
