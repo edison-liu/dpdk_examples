@@ -185,7 +185,7 @@ print_stats(void)
 }
 
 static void
-mac_updating(struct rte_mbuf *m, unsigned dest_portid)
+do_mac_updating(struct rte_mbuf *m, unsigned dest_portid)
 {
 	struct ether_hdr *eth;
 	void *tmp;
@@ -210,7 +210,7 @@ simple_forward(struct rte_mbuf *m, unsigned portid)
 	dst_port = dst_ports[portid];
 
 	if (mac_updating)
-		mac_updating(m, dst_port);
+		do_mac_updating(m, dst_port);
 
 	buffer = tx_buffer[dst_port];
 	sent = rte_eth_tx_buffer(dst_port, 0, buffer, m);
