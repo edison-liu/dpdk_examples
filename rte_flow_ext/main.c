@@ -1,7 +1,8 @@
 /*-
  *   BSD LICENSE
  *
- *   Copyright 2017 Mellanox.
+ *   Copyright(c) 2010-2016 Intel Corporation. All rights reserved.
+ *   All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -13,7 +14,7 @@
  *       notice, this list of conditions and the following disclaimer in
  *       the documentation and/or other materials provided with the
  *       distribution.
- *     * Neither the name of Mellanox. nor the names of its
+ *     * Neither the name of Intel Corporation nor the names of its
  *       contributors may be used to endorse or promote products derived
  *       from this software without specific prior written permission.
  *
@@ -32,7 +33,6 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <signal.h>
 #include <string.h>
 #include <stdint.h>
 #include <inttypes.h>
@@ -46,889 +46,718 @@
 #include <getopt.h>
 #include <signal.h>
 #include <stdbool.h>
-#include <sys/sysinfo.h>
-#include <sys/mman.h>
-#include <malloc.h>
-#include <time.h>
-#include <unistd.h>
-#include <arpa/inet.h>
-#include <netinet/in.h>
 
-#include <rte_eal.h>
 #include <rte_common.h>
+#include <rte_log.h>
 #include <rte_malloc.h>
+#include <rte_memory.h>
+#include <rte_memcpy.h>
+#include <rte_eal.h>
+#include <rte_launch.h>
+#include <rte_atomic.h>
 #include <rte_cycles.h>
+#include <rte_prefetch.h>
+#include <rte_lcore.h>
+#include <rte_per_lcore.h>
+#include <rte_branch_prediction.h>
+#include <rte_interrupts.h>
+#include <rte_random.h>
+#include <rte_debug.h>
 #include <rte_ether.h>
 #include <rte_ethdev.h>
 #include <rte_mempool.h>
 #include <rte_mbuf.h>
-#include <rte_net.h>
-#include <rte_flow.h>
-#include <rte_malloc.h>
 
+#define RTE_LOGTYPE_RTE_FLOW RTE_LOGTYPE_USER1
 
-#define FLOW_PERF_BATCH 10000
-#define RDTSC_TIME(start) \
-		((rte_rdtsc() - start) / (float) rte_get_timer_hz())
+static volatile bool force_quit;
 
-static unsigned nb_ports;
-//static uint8_t port_id;
-static uint16_t nr_queues = 4;
-struct rte_mempool *mbuf_pool;
-struct rte_flow *flow;
-static struct rte_flow **perf_flows; /* Flows created. */
-static struct rte_flow **perf_flows_random; /* Flows created. */
-const char *dump_file = "/tmp/flowtest_dump";
-int dump_flow_en;
+/* MAC updating enabled by default */
+static int mac_updating = 1;
 
-#define ACTION_RAW_ENCAP_MAX_DATA 128
-#define RAW_ENCAP_CONFS_MAX_NUM 8
-struct sysinfo start_info;
-struct sysinfo end_info;
+#define NB_MBUF   8192
 
+#define MAX_PKT_BURST 32
+#define BURST_TX_DRAIN_US 100 /* TX drain every ~100us */
+#define MEMPOOL_CACHE_SIZE 256
 
-/** Storage for struct rte_flow_action_raw_decap. */
-struct raw_decap_conf {
-	uint8_t data[ACTION_RAW_ENCAP_MAX_DATA];
-	size_t size;
+/*
+ * Configurable number of RX/TX ring descriptors
+ */
+#define RTE_TEST_RX_DESC_DEFAULT 128
+#define RTE_TEST_TX_DESC_DEFAULT 512
+static uint16_t nb_rxd = RTE_TEST_RX_DESC_DEFAULT;
+static uint16_t nb_txd = RTE_TEST_TX_DESC_DEFAULT;
+
+/* ethernet addresses of ports */
+static struct ether_addr ports_eth_addr[RTE_MAX_ETHPORTS];
+
+/* mask of enabled ports */
+static uint32_t enabled_port_mask = 0;
+
+/* list of enabled ports */
+static uint32_t dst_ports[RTE_MAX_ETHPORTS];
+
+static unsigned int rx_queue_per_lcore = 1;
+
+#define MAX_RX_QUEUE_PER_LCORE 16
+#define MAX_TX_QUEUE_PER_PORT 16
+struct lcore_queue_conf {
+	unsigned n_rx_port;
+	unsigned rx_port_list[MAX_RX_QUEUE_PER_LCORE];
+} __rte_cache_aligned;
+struct lcore_queue_conf lcore_queue_conf[RTE_MAX_LCORE];
+
+static struct rte_eth_dev_tx_buffer *tx_buffer[RTE_MAX_ETHPORTS];
+
+static const struct rte_eth_conf port_conf = {
+	.rxmode = {
+		.split_hdr_size = 0,
+		.header_split   = 0, /**< Header Split disabled */
+		.hw_ip_checksum = 0, /**< IP checksum offload disabled */
+		.hw_vlan_filter = 0, /**< VLAN filtering disabled */
+		.jumbo_frame    = 0, /**< Jumbo Frame Support disabled */
+		.hw_strip_crc   = 1, /**< CRC stripped by hardware */
+	},
+	.txmode = {
+		.mq_mode = ETH_MQ_TX_NONE,
+	},
 };
-/** Storage for struct rte_flow_action_raw_encap. */
-struct raw_encap_conf {
-	uint8_t data[ACTION_RAW_ENCAP_MAX_DATA];
-	uint8_t preserve[ACTION_RAW_ENCAP_MAX_DATA];
-	size_t size;
-};
-struct raw_encap_conf raw_encap_confs[RAW_ENCAP_CONFS_MAX_NUM];
-struct raw_decap_conf raw_decap_confs[RAW_ENCAP_CONFS_MAX_NUM];
-struct flow_perf_stats {
-	uint64_t created;
-	uint64_t deleted;
-};
-struct flow_perf_stats stats = {0};
-static uint64_t flow_per_round;
-static uint64_t round_count = 1;
-static uint64_t random_per_round = 300;
-int force_quit;
+
+struct rte_mempool * pktmbuf_pool = NULL;
+
+/* Per-port statistics struct */
+struct port_statistics {
+	uint64_t tx;
+	uint64_t rx;
+	uint64_t dropped;
+} __rte_cache_aligned;
+struct port_statistics port_statistics[RTE_MAX_ETHPORTS];
+
+#define MAX_TIMER_PERIOD 86400 /* 1 day max */
+/* A tsc-based timer responsible for triggering statistics printout */
+static uint64_t timer_period = 10; /* default period is 10 seconds */
+
+/* Print out statistics on packets dropped */
+static void
+print_stats(void)
+{
+	uint64_t total_packets_dropped, total_packets_tx, total_packets_rx;
+	unsigned portid;
+
+	total_packets_dropped = 0;
+	total_packets_tx = 0;
+	total_packets_rx = 0;
+
+	const char clr[] = { 27, '[', '2', 'J', '\0' };
+	const char topLeft[] = { 27, '[', '1', ';', '1', 'H','\0' };
+
+		/* Clear screen and move to top left */
+	printf("%s%s", clr, topLeft);
+
+	printf("\nPort statistics ====================================");
+
+	for (portid = 0; portid < RTE_MAX_ETHPORTS; portid++) {
+		/* skip disabled ports */
+		if ((enabled_port_mask & (1 << portid)) == 0)
+			continue;
+		printf("\nStatistics for port %u ------------------------------"
+			   "\nPackets sent: %24"PRIu64
+			   "\nPackets received: %20"PRIu64
+			   "\nPackets dropped: %21"PRIu64,
+			   portid,
+			   port_statistics[portid].tx,
+			   port_statistics[portid].rx,
+			   port_statistics[portid].dropped);
+
+		total_packets_dropped += port_statistics[portid].dropped;
+		total_packets_tx += port_statistics[portid].tx;
+		total_packets_rx += port_statistics[portid].rx;
+	}
+	printf("\nAggregate statistics ==============================="
+		   "\nTotal packets sent: %18"PRIu64
+		   "\nTotal packets received: %14"PRIu64
+		   "\nTotal packets dropped: %15"PRIu64,
+		   total_packets_tx,
+		   total_packets_rx,
+		   total_packets_dropped);
+	printf("\n====================================================\n");
+}
+
+static void
+mac_updating(struct rte_mbuf *m, unsigned dest_portid)
+{
+	struct ether_hdr *eth;
+	void *tmp;
+
+	eth = rte_pktmbuf_mtod(m, struct ether_hdr *);
+
+	/* 02:00:00:00:00:xx */
+	tmp = &eth->d_addr.addr_bytes[0];
+	*((uint64_t *)tmp) = 0x000000000002 + ((uint64_t)dest_portid << 40);
+
+	/* src addr */
+	ether_addr_copy(&ports_eth_addr[dest_portid], &eth->s_addr);
+}
+
+static void
+simple_forward(struct rte_mbuf *m, unsigned portid)
+{
+	unsigned dst_port;
+	int sent;
+	struct rte_eth_dev_tx_buffer *buffer;
+
+	dst_port = dst_ports[portid];
+
+	if (mac_updating)
+		mac_updating(m, dst_port);
+
+	buffer = tx_buffer[dst_port];
+	sent = rte_eth_tx_buffer(dst_port, 0, buffer, m);
+	if (sent)
+		port_statistics[dst_port].tx += sent;
+}
+
+/* main processing loop */
+static void
+main_loop(void)
+{
+	struct rte_mbuf *pkts_burst[MAX_PKT_BURST];
+	struct rte_mbuf *m;
+	int sent;
+	unsigned lcore_id;
+	uint64_t prev_tsc, diff_tsc, cur_tsc, timer_tsc;
+	unsigned i, j, portid, nb_rx;
+	struct lcore_queue_conf *qconf;
+	const uint64_t drain_tsc = (rte_get_tsc_hz() + US_PER_S - 1) / US_PER_S *
+			BURST_TX_DRAIN_US;
+	struct rte_eth_dev_tx_buffer *buffer;
+
+	prev_tsc = 0;
+	timer_tsc = 0;
+
+	lcore_id = rte_lcore_id();
+	qconf = &lcore_queue_conf[lcore_id];
+
+	if (qconf->n_rx_port == 0) {
+		RTE_LOG(INFO, RTE_FLOW, "lcore %u has nothing to do\n", lcore_id);
+		return;
+	}
+
+	RTE_LOG(INFO, RTE_FLOW, "entering main loop on lcore %u\n", lcore_id);
+
+	for (i = 0; i < qconf->n_rx_port; i++) {
+
+		portid = qconf->rx_port_list[i];
+		RTE_LOG(INFO, RTE_FLOW, " -- lcoreid=%u portid=%u\n", lcore_id,
+			portid);
+
+	}
+
+	while (!force_quit) {
+
+		cur_tsc = rte_rdtsc();
+
+		/*
+		 * TX burst queue drain
+		 */
+		diff_tsc = cur_tsc - prev_tsc;
+		if (unlikely(diff_tsc > drain_tsc)) {
+
+			for (i = 0; i < qconf->n_rx_port; i++) {
+
+				portid = dst_ports[qconf->rx_port_list[i]];
+				buffer = tx_buffer[portid];
+
+				sent = rte_eth_tx_buffer_flush(portid, 0, buffer);
+				if (sent)
+					port_statistics[portid].tx += sent;
+
+			}
+
+			/* if timer is enabled */
+			if (timer_period > 0) {
+
+				/* advance the timer */
+				timer_tsc += diff_tsc;
+
+				/* if timer has reached its timeout */
+				if (unlikely(timer_tsc >= timer_period)) {
+
+					/* do this only on master core */
+					if (lcore_id == rte_get_master_lcore()) {
+						print_stats();
+						/* reset the timer */
+						timer_tsc = 0;
+					}
+				}
+			}
+
+			prev_tsc = cur_tsc;
+		}
+
+		/*
+		 * Read packet from RX queues
+		 */
+		for (i = 0; i < qconf->n_rx_port; i++) {
+
+			portid = qconf->rx_port_list[i];
+			nb_rx = rte_eth_rx_burst(portid, 0,
+						 pkts_burst, MAX_PKT_BURST);
+
+			port_statistics[portid].rx += nb_rx;
+
+			for (j = 0; j < nb_rx; j++) {
+				m = pkts_burst[j];
+				rte_prefetch0(rte_pktmbuf_mtod(m, void *));
+				simple_forward(m, portid);
+			}
+		}
+	}
+}
 
 static int
-flow_stress_test(uint8_t port_id, struct rte_flow_error *error);
+launch_one_lcore(__attribute__((unused)) void *dummy)
+{
+	main_loop();
+	return 0;
+}
 
 /* display usage */
 static void
-print_usage(const char *prgname)
+usage(const char *prgname)
 {
-	printf("%s [EAL options] -- -c count [-r round]\n"
-	       "  -c count: flow number for each round\n"
-	       "  -r round count: number of round (default is 1)\n"
-	       "  -d dump file name: dump last round flow into file\n",
+	printf("%s [EAL options] -- -p PORTMASK [-q NQ]\n"
+	       "  -p PORTMASK: hexadecimal bitmask of ports to configure\n"
+	       "  -q NQ: number of queue (=ports) per lcore (default is 1)\n"
+		   "  -T PERIOD: statistics will be refreshed each PERIOD seconds (0 to disable, 10 default, 86400 maximum)\n"
+		   "  --[no-]mac-updating: Enable or disable MAC addresses updating (enabled by default)\n"
+		   "      When enabled:\n"
+		   "       - The source MAC address is replaced by the TX port MAC address\n"
+		   "       - The destination MAC address is replaced by 02:00:00:00:00:TX_PORT_ID\n",
 	       prgname);
 }
+
+static int
+parse_portmask(const char *portmask)
+{
+	char *end = NULL;
+	unsigned long pm;
+
+	/* parse hexadecimal string */
+	pm = strtoul(portmask, &end, 16);
+	if ((portmask[0] == '\0') || (end == NULL) || (*end != '\0'))
+		return -1;
+
+	if (pm == 0)
+		return -1;
+
+	return pm;
+}
+
+static unsigned int
+parse_nqueue(const char *q_arg)
+{
+	char *end = NULL;
+	unsigned long n;
+
+	/* parse hexadecimal string */
+	n = strtoul(q_arg, &end, 10);
+	if ((q_arg[0] == '\0') || (end == NULL) || (*end != '\0'))
+		return 0;
+	if (n == 0)
+		return 0;
+	if (n >= MAX_RX_QUEUE_PER_LCORE)
+		return 0;
+
+	return n;
+}
+
+static int
+parse_timer_period(const char *q_arg)
+{
+	char *end = NULL;
+	int n;
+
+	/* parse number string */
+	n = strtol(q_arg, &end, 10);
+	if ((q_arg[0] == '\0') || (end == NULL) || (*end != '\0'))
+		return -1;
+	if (n >= MAX_TIMER_PERIOD)
+		return -1;
+
+	return n;
+}
+
+static const char short_options[] =
+	"p:"  /* portmask */
+	"q:"  /* number of queues */
+	"T:"  /* timer period */
+	;
+
+#define CMD_LINE_OPT_MAC_UPDATING "mac-updating"
+#define CMD_LINE_OPT_NO_MAC_UPDATING "no-mac-updating"
+
+enum {
+	/* long options mapped to a short option */
+
+	/* first long only option value must be >= 256, so that we won't
+	 * conflict with short options */
+	CMD_LINE_OPT_MIN_NUM = 256,
+};
+
+static const struct option lgopts[] = {
+	{ CMD_LINE_OPT_MAC_UPDATING, no_argument, &mac_updating, 1},
+	{ CMD_LINE_OPT_NO_MAC_UPDATING, no_argument, &mac_updating, 0},
+	{NULL, 0, 0, 0}
+};
 
 /* Parse the argument given in the command line of the application */
 static int
 parse_args(int argc, char **argv)
 {
-	int opt, ret = 0;
+	int opt, ret, timer_secs;
 	char **argvopt;
 	int option_index;
 	char *prgname = argv[0];
-	static struct option lgopts[] = {
-		{NULL, 0, 0, 0}
-	};
 
 	argvopt = argv;
 
-	while ((opt = getopt_long(argc, argvopt, "c:r:dh",
+	while ((opt = getopt_long(argc, argvopt, short_options,
 				  lgopts, &option_index)) != EOF) {
 
 		switch (opt) {
-		case 'c':
-			flow_per_round = strtoul(optarg, NULL, 0);
-			if (flow_per_round <= 0)
-				ret = -1;
+		/* portmask */
+		case 'p':
+			enabled_port_mask = parse_portmask(optarg);
+			if (enabled_port_mask == 0) {
+				printf("invalid portmask\n");
+				usage(prgname);
+				return -1;
+			}
 			break;
 
-		case 'r':
-			round_count = strtoul(optarg, NULL, 0);
-			if (round_count <= 0)
-				ret = -1;
+		/* nqueue */
+		case 'q':
+			rx_queue_per_lcore = parse_nqueue(optarg);
+			if (rx_queue_per_lcore == 0) {
+				printf("invalid queue number\n");
+				usage(prgname);
+				return -1;
+			}
 			break;
-		case 'd':
-			dump_flow_en = 1;
-		case 'h':
-			print_usage(prgname);
-			rte_exit(EXIT_SUCCESS, "Displayed help\n");
+
+		/* timer period */
+		case 'T':
+			timer_secs = parse_timer_period(optarg);
+			if (timer_secs < 0) {
+				printf("invalid timer period\n");
+				usage(prgname);
+				return -1;
+			}
+			timer_period = timer_secs;
 			break;
 
 		/* long options */
 		case 0:
+			break;
+
 		default:
-			print_usage(prgname);
+			usage(prgname);
 			return -1;
 		}
 	}
 
-	return ret;
-}
-/** Dump all flow rules. */
-static int port_flow_dump(uint16_t port_id, const char *file_name)
-{
-	int ret = 0;
-	FILE *file = stdout;
-	struct rte_flow_error error;
+	if (optind >= 0)
+		argv[optind-1] = prgname;
 
-	if (file_name && strlen(file_name)) {
-		file = fopen(file_name, "w");
-		if (!file) {
-			printf("Failed to create file %s: %s\n", file_name,
-			       strerror(errno));
-			return -errno;
-		}
-	}
-	ret = rte_flow_dev_dump(port_id, file, &error);
-	if (ret)
-		printf("Failed to dump flow: %s\n", strerror(-ret));
-	else
-		printf("Flow dump finished\n");
-	if (file_name && strlen(file_name))
-		fclose(file);
+	ret = optind-1;
+	optind = 1; /* reset getopt lib */
 	return ret;
 }
 
-static int
-flow_stress_complete(void)
+/* Check the link status of all ports in up to 9s, and print them finally */
+static void
+check_all_ports_link_status(uint16_t port_num, uint32_t port_mask)
 {
-	/* closing and releasing resources */
-	rte_eth_dev_stop(port_id);
-	rte_eth_dev_close(port_id);
+#define CHECK_INTERVAL 100 /* 100ms */
+#define MAX_CHECK_TIME 90 /* 9s (90 * 100ms) in total */
+	uint16_t portid;
+	uint8_t count, all_ports_up, print_flag = 0;
+	struct rte_eth_link link;
 
-	return 0;
-}
-
-/*
- *  * link-status-changing(LSC) callback
- *   */
-static int lsc_callback(uint16_t port_id, enum rte_eth_event_type type,
-        __unused void *param, __unused void *ret_param)
-{
-        struct rte_eth_link link;
-
-        if (type == RTE_ETH_EVENT_INTR_LSC) {
-                printf("LSC Port:%u Link status changed\n", port_id);
-                rte_eth_link_get(port_id, &link);
-                if (link.link_status) {
-                        printf("LSC Port:%u Link Up - speed %u Mbps - %s\n",
-                                port_id, (unsigned)link.link_speed,
-                                (link.link_duplex == ETH_LINK_FULL_DUPLEX) ?
-                                ("full-duplex") : ("half-duplex"));
-                } else {
-                        printf("LSC Port:%u Link Down\n", port_id);
-                }
-        }
-
-        return 0;
-}
-
-static void init_port(void)
-{
-	int ret;
-	uint16_t i;
-	unsigned int port_id;
-	struct rte_eth_conf port_conf = {
-		.rxmode = {
-			.max_rx_pkt_len = ETHER_MAX_LEN, /**< Default maximum frame length. */
-		},
-		.txmode = {
-			.offloads = DEV_TX_OFFLOAD_MBUF_FAST_FREE |
-				    DEV_TX_OFFLOAD_MATCH_METADATA,
-		},
-	};
-
-	for (port_id = 0; port_id < nb_ports; port_id ++) {
-		printf("initializing port: %d\n", port_id);
-		ret = rte_eth_dev_configure(port_id,
-					nr_queues, nr_queues, &port_conf);
-		if (ret < 0) {
-			rte_exit(EXIT_FAILURE,
-				":: cannot configure device: err=%d, port=%u\n",
-				ret, port_id);
-		}
-
-		for (i = 0; i < nr_queues; i++) {
-			ret = rte_eth_rx_queue_setup(port_id, i, 512,
-						rte_eth_dev_socket_id(port_id),
-						NULL,
-						mbuf_pool);
-			if (ret < 0) {
-				rte_exit(EXIT_FAILURE,
-					":: Rx queue setup failed: err=%d, port=%u\n",
-					ret, port_id);
+	printf("\nChecking link status");
+	fflush(stdout);
+	for (count = 0; count <= MAX_CHECK_TIME; count++) {
+		if (force_quit)
+			return;
+		all_ports_up = 1;
+		for (portid = 0; portid < port_num; portid++) {
+			if (force_quit)
+				return;
+			if ((port_mask & (1 << portid)) == 0)
+				continue;
+			memset(&link, 0, sizeof(link));
+			rte_eth_link_get_nowait(portid, &link);
+			/* print link status if flag set */
+			if (print_flag == 1) {
+				if (link.link_status)
+					printf(
+					"Port%d Link Up. Speed %u Mbps - %s\n",
+						portid, link.link_speed,
+				(link.link_duplex == ETH_LINK_FULL_DUPLEX) ?
+					("full-duplex") : ("half-duplex\n"));
+				else
+					printf("Port %d Link Down\n", portid);
+				continue;
+			}
+			/* clear all_ports_up flag if any link down */
+			if (link.link_status == ETH_LINK_DOWN) {
+				all_ports_up = 0;
+				break;
 			}
 		}
-		for (i = 0; i < nr_queues; i++) {
-			ret = rte_eth_tx_queue_setup(port_id, i, 512,
-						rte_eth_dev_socket_id(port_id),
-						NULL);
-			if (ret < 0) {
-				rte_exit(EXIT_FAILURE,
-					":: Tx queue setup failed: err=%d, port=%u\n",
-					ret, port_id);
-			}
+		/* after finally printing all link status, get out */
+		if (print_flag == 1)
+			break;
+
+		if (all_ports_up == 0) {
+			printf(".");
+			fflush(stdout);
+			rte_delay_ms(CHECK_INTERVAL);
 		}
 
-		rte_eth_dev_callback_register(port_id, RTE_ETH_EVENT_INTR_LSC, lsc_callback, NULL);
-		rte_eth_promiscuous_enable(port_id);
-		ret = rte_eth_dev_start(port_id);
-		if (ret < 0) {
-			rte_exit(EXIT_FAILURE,
-				"rte_eth_dev_start:err=%d, port=%u\n",
-				ret, port_id);
+		/* set the print_flag if all ports up or timeout */
+		if (all_ports_up == 1 || count == (MAX_CHECK_TIME - 1)) {
+			print_flag = 1;
+			printf("done\n");
 		}
-
-		ret = rte_flow_isolate(port_id, 1, NULL);
-		if (ref < 0) {
-				"rte_flow_isolate:err=%d, port=%u\n",
-				ret, port_id);			
-		}
-
-	}
-}
-
-static void signal_handler(int signum)
-{
-	if (signum == SIGINT || signum == SIGTERM) {
-		force_quit = 1;
-		printf("\nSignal %d received, preparing to exit...\n",
-				signum);
-		/* exit with the expected status */
-		signal(signum, SIG_DFL);
-		kill(getpid(), signum);
 	}
 }
 
 static void
-flow_perf_dump(const struct rte_flow_attr *attr,
-	       const struct rte_flow_item patterns[] __rte_unused,
-	       const struct rte_flow_action actions[] __rte_unused)
+signal_handler(int signum)
 {
-
-	printf("%s group %u, pattern: ", attr->ingress ? "ingress" : "egress",
-	       attr->group);
-	printf(" actions: ");
-	printf("\n");
+	if (signum == SIGINT || signum == SIGTERM) {
+		printf("\n\nSignal %d received, preparing to exit...\n",
+				signum);
+		force_quit = true;
+	}
 }
 
-static int getMemValue(const char *str)
+int
+main(int argc, char **argv)
 {
-	FILE *file = fopen("/proc/self/status", "r");
-	char line[255];
-	int len = strlen(str);
-
-	if (!file)
-		return -1;
-	while (fgets(line, 256, file) != NULL) {
-		if (strncmp(line, str, len) == 0)
-			printf("<====== %s\n", line);
-	}
-	fclose(file);
-	return 0;
-}
-
-static int
-flow_stress_test(uint8_t port, struct rte_flow_error *error)
-{
-	uint64_t start;
-	uint64_t uport = 0;
-	struct rte_flow *default_flow =  NULL;
-	struct rte_flow *group_miss_flow = NULL;
-	struct rte_flow *ingress_jump_flow = NULL;
-	struct rte_flow *egress_jump_flow = NULL;
-	uint32_t cnt = 0;
-
-	struct rte_flow_attr attr = {
-		.ingress = 1,
-		.egress = 0,
-		.group = 0,
-	};
-	struct _raw_encap_gre_ {
-		struct rte_flow_item_eth eth;
-		struct rte_flow_item_ipv4 ipv4;
-		struct rte_flow_item_gre gre;
-		struct rte_flow_item_gre_opt_key gre_key;
-	} __rte_packed;
-	struct _raw_encap_eth_ {
-		struct rte_flow_item_eth eth;
-	} __rte_packed;
-	struct _raw_encap_gre_ raw_encap_gre = {
-		.eth = {
-			.src = {
-				.addr_bytes = {0x10, 0x20, 0x30,
-						0x40, 0x50, 0x60},
-			},
-			.dst = {
-				.addr_bytes = {0xa0, 0xb0, 0xc0,
-						0xd0, 0xe0, 0xf2},
-			},
-			.type = RTE_BE16(0x0800),
-		},
-		.ipv4 = {
-			.hdr = {
-				.src_addr = RTE_BE32(IPv4(10, 10, 0, 11)),
-				.dst_addr = RTE_BE32(IPv4(10, 0, 0, 11)),
-				.next_proto_id = 47,
-				.version_ihl = 0x45,
-				.time_to_live = 33,
-			}
-		},
-		.gre = {
-			.protocol = RTE_BE16(0x0800),
-			.c_rsvd0_ver = RTE_BE16(0x2000),
-		},
-	};
-	struct _raw_encap_eth_ raw_encap_eth = {
-		.eth = {
-			.src = {
-				.addr_bytes = {0x10, 0x22, 0x33,
-						0x44, 0x55, 0x60},
-			},
-			.dst = {
-				.addr_bytes = {0xa0, 0xbb, 0xcc,
-						0xdd, 0xee, 0xf2},
-			},
-			.type = RTE_BE16(0x0800),
-		},
-	};
-	struct rte_flow_item_gre i_gre = {
-		.protocol = RTE_BE16(ETHER_TYPE_IPv4),
-	};
-	struct rte_flow_item_gre_opt_key i_gre_key = {
-		.key = RTE_BE32(0x1244f),
-	};
-	struct rte_flow_item *patterns = NULL;
-	struct rte_flow_item *jump_patterns = NULL;
-	struct rte_flow_action *actions = NULL;
-	struct rte_flow_action jump_actions[2];
-	struct rte_flow_item_ipv4 o_ip = {
-		.hdr = {
-			.src_addr = RTE_BE32(IPv4(10, 0, 0, 10)),
-			.dst_addr = RTE_BE32(IPv4(10, 10, 0, 10)),
-		}
-	};
-	struct rte_flow_item_ipv4 i_ipc = {
-		.hdr = {
-			.src_addr = RTE_BE32(IPv4(10, 0, 0, 10)),
-			.dst_addr = RTE_BE32(IPv4(10, 10, 0, 10)),
-		}
-	};
-
-
-	struct rte_flow_item_udp i_udp = {
-		.hdr = {
-			.src_port = RTE_BE16(3),
-			.dst_port = RTE_BE16(4),
-		},
-	};
-	struct rte_flow_item_udp i_udp_mask = {
-		.hdr = {
-			.src_port = RTE_BE16(0xFFFF),
-			.dst_port = RTE_BE16(0xFFFF),
-		},
-	};
-
-	struct rte_flow_action_mark mark = {
-		.id = 0x123456
-	};
-	static struct rte_eth_rss_conf rss_conf = {
-		.rss_key = NULL,
-		.rss_key_len = 0,
-		.rss_hf = ETH_RSS_IP,
-		.rss_level = 0,
-	};
-	union {
-		struct rte_flow_action_rss rss;
-		struct {
-			const struct rte_eth_rss_conf *rss_conf;
-			uint16_t num;
-			uint16_t queues[4];
-		} local;
-	} rss = {
-		.local = {
-			.rss_conf = &rss_conf,
-			.num = 4,
-			.queues = {0, 1, 2, 3},
-		},
-	};
-	struct rte_flow_action_jump jump = {
-		.group = 1,
-	};
-	jump_actions[0] = (struct rte_flow_action) {
-		.type = RTE_FLOW_ACTION_TYPE_JUMP,
-		.conf = &jump,
-	};
-	jump_actions[1] = (struct rte_flow_action) {
-		.type = RTE_FLOW_ACTION_TYPE_END,
-	};
-	struct rte_flow_action_raw_encap encap_raw = {
-		.data = NULL,
-		.preserve = NULL,
-		.size = raw_encap_confs[0].size,
-	};
-	struct rte_flow_action_raw_decap decap_raw = {
-		.data = raw_decap_confs[1].data,
-		.size = raw_decap_confs[1].size,
-	};
-
-	struct rte_flow_item_meta rmeta = {
-		.data = RTE_BE32(8000000),
-	};
-	if (perf_flows) {
-		printf("Flows overwritten\n");
-		rte_free(perf_flows);
-		perf_flows = NULL;
-	}
-	perf_flows = rte_malloc(NULL, sizeof(void *) * (flow_per_round + 1), 0);
-	if (!perf_flows) {
-		printf("Unable to allocate memory\n");
-		return -1;
-	}
-
-	if (perf_flows_random) {
-		printf("Flows overwritten\n");
-		rte_free(perf_flows_random);
-		perf_flows_random = NULL;
-	}
-	perf_flows_random = rte_malloc(NULL, sizeof(void *) * (random_per_round + 1), 0);
-	if (!perf_flows_random) {
-		printf("Unable to allocate memory\n");
-		return -1;
-	}
-
-	printf("Creating...\n");
-	getMemValue("VmRSS");
-	fflush(stdout);
-
-	/* default flow */
-	attr.ingress = 1;
-	attr.egress = 0;
-	attr.priority = 1;
-	attr.group = 0;
-	patterns = (struct rte_flow_item[]) {
-			{.type = RTE_FLOW_ITEM_TYPE_ETH},
-			{.type = RTE_FLOW_ITEM_TYPE_IPV4},
-			{.type = RTE_FLOW_ITEM_TYPE_GRE},
-			{.type = RTE_FLOW_ITEM_TYPE_END},
-	};
-	actions = (struct rte_flow_action []) {
-				{.type = RTE_FLOW_ACTION_TYPE_RSS,
-				 .conf = &rss},
-				{.type = RTE_FLOW_ACTION_TYPE_END},
-	};
-	default_flow =
-		rte_flow_create(port, &attr, patterns,
-					actions, error);
-	if (!default_flow) {
-		printf("Error create default flow:%s\n", error->message);
-		return -1;
-	}
-	flow_perf_dump(&attr, patterns, actions);
-	printf("1. Create default flow:%p\n", default_flow);
-
-
-	i_ipc.hdr.src_addr = RTE_BE32(IPv4(192, 168, 0, 1));
-	i_ipc.hdr.dst_addr = RTE_BE32(IPv4(192, 168, 10, 1));
-	do {
-		printf("######################### Flow create/flush testing, Round: %d #########################\n", ++cnt);
-		o_ip.hdr.dst_addr = RTE_BE32(IPv4(10, 10, 0, 10));
-		/* egress jump flow */
-		attr.ingress = 0;
-		attr.egress = 1;
-		attr.group = 0;
-		struct rte_flow_item_meta meta = {
-			.data = RTE_BE32(0x1),
-		};
-		jump_patterns = (struct rte_flow_item[]) {
-			{.type = RTE_FLOW_ITEM_TYPE_META,
-			 .spec = &meta},
-			{.type = RTE_FLOW_ITEM_TYPE_END},
-		};
-		egress_jump_flow =
-			rte_flow_create(port, &attr, jump_patterns,
-					jump_actions, error);
-		if (!egress_jump_flow) {
-			printf("Error create egress jump flow:%s\n",
-					error->message);
-			return -1;
-		}
-		flow_perf_dump(&attr, jump_patterns, jump_actions);
-		printf("2. Create egress jump flow:%p\n", egress_jump_flow);
-
-		stats.created++;
-		if (!group_miss_flow) {
-			/* group miss */
-			patterns = (struct rte_flow_item[]) {
-				{.type = RTE_FLOW_ITEM_TYPE_ETH},
-				{.type = RTE_FLOW_ITEM_TYPE_IPV4},
-				{.type = RTE_FLOW_ITEM_TYPE_GRE},
-				{.type = RTE_FLOW_ITEM_TYPE_END},
-			};
-			actions = (struct rte_flow_action []) {
-					{.type = RTE_FLOW_ACTION_TYPE_RSS,
-					 .conf = &rss},
-					{.type = RTE_FLOW_ACTION_TYPE_END},
-			};
-			attr.ingress = 1;
-			attr.egress = 0;
-			attr.priority = 1;
-			attr.group = 1;
-			group_miss_flow =
-				rte_flow_create(port, &attr, patterns,
-						actions, error);
-			if (!group_miss_flow) {
-				printf("Error create group miss flow:%s\n",
-						error->message);
-				return -1;
-			}
-			//	stats.created++;
-
-			flow_perf_dump(&attr, patterns, actions);
-			printf("3. Create ingress group miss flow:%p\n", group_miss_flow);
-		}
-
-		/* ingress jump flow */
-		attr.ingress = 1;
-		attr.egress = 0;
-		attr.priority = 0;
-		attr.group = 0;
-		jump_patterns = (struct rte_flow_item[]) {
-			{.type = RTE_FLOW_ITEM_TYPE_ETH},
-			{.type = RTE_FLOW_ITEM_TYPE_IPV4,
-			 .spec = &o_ip},
-			{.type = RTE_FLOW_ITEM_TYPE_GRE},
-			{.type = RTE_FLOW_ITEM_TYPE_END},
-		};
-		ingress_jump_flow =
-			rte_flow_create(port, &attr, jump_patterns,
-				jump_actions, error);
-		if (!ingress_jump_flow) {
-			printf("Error create ingress jump flow:%s\n",
-					error->message);
-			return -1;
-		}
-		stats.created++;
-		printf("4. Create ingress group jump flow:%p\n", ingress_jump_flow);
-
-		uint64_t i, idx;
-		mark.id = 0x123456;
-		o_ip.hdr.dst_addr = RTE_BE32(IPv4(10, 10, 0, 10));
-
-		printf("5. Create test GRE flow:%p, %lu\n", perf_flows, flow_per_round);
-		start = rte_rdtsc();
-		for (i = 0, idx = 0; i < flow_per_round; ++i) {
-			attr.group = 1;
-			attr.priority = 0;
-			if (i % 2 == 0) {
-				/* ingress */
-				attr.ingress = 1;
-				attr.egress = 0;
-				encap_raw.data = (uint8_t *)&raw_encap_eth;
-				encap_raw.size = sizeof(raw_encap_eth);
-				decap_raw.data = (uint8_t *)&raw_encap_gre;
-				decap_raw.size = sizeof(raw_encap_gre);
-				i_udp.hdr.src_port = RTE_BE16(uport >> 16);
-				i_udp.hdr.dst_port = RTE_BE16(uport);
-				uport++;
-				patterns = (struct rte_flow_item[]) {
-					{.type = RTE_FLOW_ITEM_TYPE_ETH},
-					{.type = RTE_FLOW_ITEM_TYPE_IPV4},
-					{.type = RTE_FLOW_ITEM_TYPE_GRE,
-					 .spec = &i_gre,
-					 .mask = &rte_flow_item_gre_mask},
-					{.type = RTE_FLOW_ITEM_TYPE_GRE_OPT_KEY,
-					 .spec = &i_gre_key,
-					 .mask = &rte_flow_item_gre_opt_key_mask},
-					{.type = RTE_FLOW_ITEM_TYPE_IPV4,
-					 .spec = &i_ipc,
-					 .mask = &rte_flow_item_ipv4_mask},
-					{.type = RTE_FLOW_ITEM_TYPE_UDP,
-					 .spec = &i_udp, .mask = &i_udp_mask},
-					{.type = RTE_FLOW_ITEM_TYPE_END},
-				};
-
-				actions = (struct rte_flow_action []) {
-					{.type = RTE_FLOW_ACTION_TYPE_MARK,
-					 .conf = &mark},
-					{.type = RTE_FLOW_ACTION_TYPE_RAW_DECAP,
-					 .conf = &decap_raw},
-					{.type = RTE_FLOW_ACTION_TYPE_RAW_ENCAP,
-					 .conf = &encap_raw},
-					{.type = RTE_FLOW_ACTION_TYPE_RSS,
-					 .conf = &rss},
-					{.type = RTE_FLOW_ACTION_TYPE_END},
-				};
-
-				perf_flows[idx] = rte_flow_create(port, &attr,
-						patterns, actions, error);
-				if (!perf_flows[idx++]) {
-					printf("Error create flow [%"PRIu64"]\n",
-						idx);
-					return -1;
-				}
-				if (i == 0)
-					flow_perf_dump(&attr,
-						patterns, actions);
-				stats.created++;
-				mark.id++;
-			} else {
-					/* egress */
-				attr.egress = 1;
-				attr.ingress = 0;
-				encap_raw.data = (uint8_t *)&raw_encap_gre;
-				encap_raw.size = sizeof(raw_encap_gre);
-				decap_raw.data = (uint8_t *)&raw_encap_eth;
-				decap_raw.size = sizeof(raw_encap_eth);
-
-				patterns = (struct rte_flow_item[]) {
-					{.type = RTE_FLOW_ITEM_TYPE_META,
-					 .spec = &meta},
-					{.type = RTE_FLOW_ITEM_TYPE_END},
-				};
-
-				actions = (struct rte_flow_action []) {
-					{.type = RTE_FLOW_ACTION_TYPE_RAW_DECAP,
-					 .conf = &decap_raw},
-					{.type = RTE_FLOW_ACTION_TYPE_RAW_ENCAP,
-					 .conf = &encap_raw},
-					{.type = RTE_FLOW_ACTION_TYPE_END},
-				};
-				perf_flows[idx] = rte_flow_create(port, &attr,
-						patterns, actions, error);
-				if (!perf_flows[idx++]) {
-					printf("Error create flow [%"PRIu64"]:"
-						"%s\n", idx, error->message);
-					return -1;
-				}
-				if (i == 0)
-					flow_perf_dump(&attr,
-						patterns, actions);
-				stats.created++;
-
-				meta.data = rte_be_to_cpu_32(meta.data) + 1;
-				meta.data = rte_be_to_cpu_32(meta.data);
-			}
-			if (force_quit)
-				goto quit;
-		}
-
-		printf("Total %u, time: %f sec\n",
-			(unsigned int)idx, RDTSC_TIME(start));
-
-		printf("5. Create test random GRE flow:%p, %lu\n", perf_flows_random, random_per_round);
-		start = rte_rdtsc();
-		for (i = 0, idx = 0; i < random_per_round; ++i) {
-			attr.group = 1;
-			attr.priority = 0;
-			/* egress */
-			attr.egress = 1;
-			attr.ingress = 0;
-			encap_raw.data = (uint8_t *)&raw_encap_gre;
-			encap_raw.size = sizeof(raw_encap_gre);
-			decap_raw.data = (uint8_t *)&raw_encap_eth;
-			decap_raw.size = sizeof(raw_encap_eth);
-
-			patterns = (struct rte_flow_item[]) {
-				{.type = RTE_FLOW_ITEM_TYPE_META,
-				 .spec = &rmeta},
-				{.type = RTE_FLOW_ITEM_TYPE_END},
-			};
-
-			actions = (struct rte_flow_action []) {
-				{.type = RTE_FLOW_ACTION_TYPE_RAW_DECAP,
-				 .conf = &decap_raw},
-				{.type = RTE_FLOW_ACTION_TYPE_RAW_ENCAP,
-				 .conf = &encap_raw},
-				{.type = RTE_FLOW_ACTION_TYPE_END},
-			};
-			perf_flows_random[idx] = rte_flow_create(port, &attr,
-					patterns, actions, error);
-			if (!perf_flows_random[idx++]) {
-				printf("Error create flow [%"PRIu64"]:"
-					"%s\n", idx, error->message);
-				return -1;
-			}
-			if (i == 0)
-				flow_perf_dump(&attr,
-					patterns, actions);
-			stats.created++;
-
-			rmeta.data = rte_be_to_cpu_32(rmeta.data) + 1;
-			rmeta.data = rte_be_to_cpu_32(rmeta.data);
-			if (force_quit)
-				goto quit;
-		}
-
-quit:
-		getMemValue("VmRSS");
-		if (cnt == 1 && dump_flow_en)
-			port_flow_dump(port, dump_file);
-		printf("Destroying ....\n");
-		printf("1. Destroy ingress jump flow:%p\n", ingress_jump_flow);
-		if (rte_flow_destroy(port, ingress_jump_flow, error)) {
-			printf("Error delete ingress jump flow:%s\n",
-					error->message);
-			return -1;
-		}
-		stats.deleted++;
-
-		printf("2. Destroy egress jump flow:%p\n", egress_jump_flow);
-		if (rte_flow_destroy(port, egress_jump_flow, error)) {
-			printf("Error delete egress jump flow:%s\n",
-					error->message);
-			return -1;
-		}
-		stats.deleted++;
-
-		printf("3. Destroy test GRE flow:%p\n", perf_flows);
-		{
-			struct rte_flow **flows = perf_flows;
-			if (!flows)
-				return -1;
-			while (*flows) {
-				if (rte_flow_destroy(port,
-						*flows, error))
-					printf("Error deleting flows\n");
-				flows++;
-				stats.deleted++;
-			}
-		}
-
-		printf("3. Destroy test random flow:%p\n", perf_flows_random);
-		{
-			struct rte_flow **flows = perf_flows_random;
-			if (!flows)
-				return -1;
-			while (*flows) {
-				if (rte_flow_destroy(port,
-						*flows, error))
-					printf("Error deleting flows\n");
-				flows++;
-				stats.deleted++;
-			}
-		}
-		printf("%s, send:%ld, del:%ld\n", __func__,
-				stats.created, stats.deleted);
-		malloc_trim(0);
-		getMemValue("VmRSS");
-		printf("########################################################################################\n");
-	} while (--round_count && !force_quit);
-
-	rte_free(perf_flows);
-	perf_flows = NULL;
-
-	rte_free(perf_flows_random);
-	perf_flows_random = NULL;
-
-
-	if (group_miss_flow) {
-		printf("4. Destroy group miss flow:%p\n", group_miss_flow);
-		if (rte_flow_destroy(port, group_miss_flow, error)) {
-			printf("Error delete group miss flow:%s\n",
-				error->message);
-			return -1;
-		}
-		//stats.deleted++;
-	}
-	printf("5. Destroy default flow:%p\n", default_flow);
-	if (rte_flow_destroy(port, default_flow, error)) {
-		printf("Error delete default flow:%s\n",
-				error->message);
-		return -1;
-	}
-
-	return 0;
-}
-
-static void main_loop(void)
-{
-	struct rte_mbuf *mbufs[32];
-	struct ether_hdr *eth_hdr;
-	struct rte_flow_error error;
-	uint16_t nb_rx;
-	uint16_t i;
-	uint16_t j;
-
-	while (!force_quit) {
-		for (i = 0; i < nr_queues; i++) {
-			nb_rx = rte_eth_rx_burst(port_id,
-						i, mbufs, 32);
-			if (nb_rx) {
-				for (j = 0; j < nb_rx; j++) {
-					struct rte_mbuf *m = mbufs[j];
-
-					printf(" - queue=0x%x",
-							(unsigned int)i);
-					printf("\n");
-
-					rte_pktmbuf_free(m);
-				}
-			}
-		}
-	}
-
-	/* closing and releasing resources */
-	rte_flow_flush(port_id, &error);
-	rte_eth_dev_stop(port_id);
-	rte_eth_dev_close(port_id);
-}
-
-int main(int argc, char **argv)
-{
+	struct lcore_queue_conf *qconf;
+	struct rte_eth_dev_info dev_info;
 	int ret;
-	struct rte_flow_error error;
+	uint16_t nb_ports;
+	uint16_t nb_ports_available;
+	uint16_t portid, last_port;
+	unsigned lcore_id, rx_lcore_id;
+	unsigned nb_ports_in_mask = 0;
 
+	/* init EAL */
+	ret = rte_eal_init(argc, argv);
+	if (ret < 0)
+		rte_exit(EXIT_FAILURE, "Invalid EAL arguments\n");
+	argc -= ret;
+	argv += ret;
+
+	force_quit = false;
 	signal(SIGINT, signal_handler);
 	signal(SIGTERM, signal_handler);
 
-	mallopt(M_MXFAST, 0);
-	sysinfo(&start_info);
-	ret = rte_eal_init(argc, argv);
-	if (ret < 0)
-		rte_exit(EXIT_FAILURE, "invalid EAL arguments\n");
-
-	argc -= ret;
-	argv += ret;
 	/* parse application arguments (after the EAL ones) */
 	ret = parse_args(argc, argv);
 	if (ret < 0)
-		rte_exit(EXIT_FAILURE, "Invalid arguments");
+		rte_exit(EXIT_FAILURE, "Invalid RTE_FLOW arguments\n");
+
+	printf("MAC updating %s\n", mac_updating ? "enabled" : "disabled");
+
+	/* convert to number of cycles */
+	timer_period *= rte_get_timer_hz();
+
+	/* create the mbuf pool */
+	pktmbuf_pool = rte_pktmbuf_pool_create("mbuf_pool", NB_MBUF,
+		MEMPOOL_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE,
+		rte_socket_id());
+	if (pktmbuf_pool == NULL)
+		rte_exit(EXIT_FAILURE, "Cannot init mbuf pool\n");
 
 	nb_ports = rte_eth_dev_count();
 	if (nb_ports == 0)
-		rte_exit(EXIT_FAILURE, "no Ethernet ports found\n");
-	//port_id = 0;
+		rte_exit(EXIT_FAILURE, "No Ethernet ports - bye\n");
 
-	mbuf_pool = rte_pktmbuf_pool_create("mbuf_pool", 4096, 128, 0,
-					    RTE_MBUF_DEFAULT_BUF_SIZE,
-					    rte_socket_id());
-	if (mbuf_pool == NULL)
-		rte_exit(EXIT_FAILURE, "Cannot init mbuf pool\n");
+	/* reset dst_ports */
+	for (portid = 0; portid < RTE_MAX_ETHPORTS; portid++)
+		dst_ports[portid] = 0;
+	last_port = 0;
 
-	init_port();
-#if 0
-	/* create multiple flow */
-	ret = flow_stress_test(port_id, &error);
-	if (ret < 0) {
-		printf("Flow can't be created %d message: %s\n",
-			error.type,
-			error.message ? error.message : "(no stated reason)");
-		rte_exit(EXIT_FAILURE, "error in creating flow");
+	/*
+	 * Each logical core is assigned a dedicated TX queue on each port.
+	 */
+	for (portid = 0; portid < nb_ports; portid++) {
+		/* skip ports that are not enabled */
+		if ((enabled_port_mask & (1 << portid)) == 0)
+			continue;
+
+		if (nb_ports_in_mask % 2) {
+			dst_ports[portid] = last_port;
+			dst_ports[last_port] = portid;
+		}
+		else
+			last_port = portid;
+
+		nb_ports_in_mask++;
+
+		rte_eth_dev_info_get(portid, &dev_info);
+	}
+	if (nb_ports_in_mask % 2) {
+		printf("Notice: odd number of ports in portmask.\n");
+		dst_ports[last_port] = last_port;
 	}
 
-	flow_stress_complete();
-#endif
+	rx_lcore_id = 0;
+	qconf = NULL;
 
-	main_loop();
+	/* Initialize the port/queue configuration of each logical core */
+	for (portid = 0; portid < nb_ports; portid++) {
+		/* skip ports that are not enabled */
+		if ((enabled_port_mask & (1 << portid)) == 0)
+			continue;
 
-	return 0;
+		/* get the lcore_id for this port */
+		while (rte_lcore_is_enabled(rx_lcore_id) == 0 ||
+		       lcore_queue_conf[rx_lcore_id].n_rx_port ==
+		       rx_queue_per_lcore) {
+			rx_lcore_id++;
+			if (rx_lcore_id >= RTE_MAX_LCORE)
+				rte_exit(EXIT_FAILURE, "Not enough cores\n");
+		}
+
+		if (qconf != &lcore_queue_conf[rx_lcore_id])
+			/* Assigned a new logical core in the loop above. */
+			qconf = &lcore_queue_conf[rx_lcore_id];
+
+		qconf->rx_port_list[qconf->n_rx_port] = portid;
+		qconf->n_rx_port++;
+		printf("Lcore %u: RX port %u\n", rx_lcore_id, portid);
+	}
+
+	nb_ports_available = nb_ports;
+
+	/* Initialise each port */
+	for (portid = 0; portid < nb_ports; portid++) {
+		/* skip ports that are not enabled */
+		if ((enabled_port_mask & (1 << portid)) == 0) {
+			printf("Skipping disabled port %u\n", portid);
+			nb_ports_available--;
+			continue;
+		}
+		/* init port */
+		printf("Initializing port %u... ", portid);
+		fflush(stdout);
+		ret = rte_eth_dev_configure(portid, 1, 1, &port_conf);
+		if (ret < 0)
+			rte_exit(EXIT_FAILURE, "Cannot configure device: err=%d, port=%u\n",
+				  ret, portid);
+
+		ret = rte_eth_dev_adjust_nb_rx_tx_desc(portid, &nb_rxd,
+						       &nb_txd);
+		if (ret < 0)
+			rte_exit(EXIT_FAILURE,
+				 "Cannot adjust number of descriptors: err=%d, port=%u\n",
+				 ret, portid);
+
+		rte_eth_macaddr_get(portid,&ports_eth_addr[portid]);
+
+		/* init one RX queue */
+		fflush(stdout);
+		ret = rte_eth_rx_queue_setup(portid, 0, nb_rxd,
+					     rte_eth_dev_socket_id(portid),
+					     NULL,
+					     pktmbuf_pool);
+		if (ret < 0)
+			rte_exit(EXIT_FAILURE, "rte_eth_rx_queue_setup:err=%d, port=%u\n",
+				  ret, portid);
+
+		/* init one TX queue on each port */
+		fflush(stdout);
+		ret = rte_eth_tx_queue_setup(portid, 0, nb_txd,
+				rte_eth_dev_socket_id(portid),
+				NULL);
+		if (ret < 0)
+			rte_exit(EXIT_FAILURE, "rte_eth_tx_queue_setup:err=%d, port=%u\n",
+				ret, portid);
+
+		/* Initialize TX buffers */
+		tx_buffer[portid] = rte_zmalloc_socket("tx_buffer",
+				RTE_ETH_TX_BUFFER_SIZE(MAX_PKT_BURST), 0,
+				rte_eth_dev_socket_id(portid));
+		if (tx_buffer[portid] == NULL)
+			rte_exit(EXIT_FAILURE, "Cannot allocate buffer for tx on port %u\n",
+					portid);
+
+		rte_eth_tx_buffer_init(tx_buffer[portid], MAX_PKT_BURST);
+
+		ret = rte_eth_tx_buffer_set_err_callback(tx_buffer[portid],
+				rte_eth_tx_buffer_count_callback,
+				&port_statistics[portid].dropped);
+		if (ret < 0)
+			rte_exit(EXIT_FAILURE,
+			"Cannot set error callback for tx buffer on port %u\n",
+				 portid);
+
+		/* Start device */
+		ret = rte_eth_dev_start(portid);
+		if (ret < 0)
+			rte_exit(EXIT_FAILURE, "rte_eth_dev_start:err=%d, port=%u\n",
+				  ret, portid);
+
+		printf("done: \n");
+
+		rte_eth_promiscuous_enable(portid);
+
+		printf("Port %u, MAC address: %02X:%02X:%02X:%02X:%02X:%02X\n\n",
+				portid,
+				ports_eth_addr[portid].addr_bytes[0],
+				ports_eth_addr[portid].addr_bytes[1],
+				ports_eth_addr[portid].addr_bytes[2],
+				ports_eth_addr[portid].addr_bytes[3],
+				ports_eth_addr[portid].addr_bytes[4],
+				ports_eth_addr[portid].addr_bytes[5]);
+
+		/* initialize port stats */
+		memset(&port_statistics, 0, sizeof(port_statistics));
+	}
+
+	if (!nb_ports_available) {
+		rte_exit(EXIT_FAILURE,
+			"All available ports are disabled. Please set portmask.\n");
+	}
+
+	check_all_ports_link_status(nb_ports, enabled_port_mask);
+
+	ret = 0;
+	/* launch per-lcore init on every lcore */
+	rte_eal_mp_remote_launch(launch_one_lcore, NULL, CALL_MASTER);
+	RTE_LCORE_FOREACH_SLAVE(lcore_id) {
+		if (rte_eal_wait_lcore(lcore_id) < 0) {
+			ret = -1;
+			break;
+		}
+	}
+
+	for (portid = 0; portid < nb_ports; portid++) {
+		if ((enabled_port_mask & (1 << portid)) == 0)
+			continue;
+		printf("Closing port %d...", portid);
+		rte_eth_dev_stop(portid);
+		rte_eth_dev_close(portid);
+		printf(" Done\n");
+	}
+	printf("Bye...\n");
+
+	return ret;
 }
-
-
