@@ -71,7 +71,8 @@
 #define RDTSC_TIME(start) \
 		((rte_rdtsc() - start) / (float) rte_get_timer_hz())
 
-static uint8_t port_id;
+static unsigned nb_ports;
+//static uint8_t port_id;
 static uint16_t nr_queues = 4;
 struct rte_mempool *mbuf_pool;
 struct rte_flow *flow;
@@ -170,8 +171,7 @@ parse_args(int argc, char **argv)
 	return ret;
 }
 /** Dump all flow rules. */
-static int
-port_flow_dump(uint16_t port_id, const char *file_name)
+static int port_flow_dump(uint16_t port_id, const char *file_name)
 {
 	int ret = 0;
 	FILE *file = stdout;
@@ -205,11 +205,35 @@ flow_stress_complete(void)
 	return 0;
 }
 
-static void
-init_port(void)
+/*
+ *  * link-status-changing(LSC) callback
+ *   */
+static int lsc_callback(uint16_t port_id, enum rte_eth_event_type type,
+        __unused void *param, __unused void *ret_param)
+{
+        struct rte_eth_link link;
+
+        if (type == RTE_ETH_EVENT_INTR_LSC) {
+                printf("LSC Port:%u Link status changed\n", port_id);
+                rte_eth_link_get(port_id, &link);
+                if (link.link_status) {
+                        printf("LSC Port:%u Link Up - speed %u Mbps - %s\n",
+                                port_id, (unsigned)link.link_speed,
+                                (link.link_duplex == ETH_LINK_FULL_DUPLEX) ?
+                                ("full-duplex") : ("half-duplex"));
+                } else {
+                        printf("LSC Port:%u Link Down\n", port_id);
+                }
+        }
+
+        return 0;
+}
+
+static void init_port(void)
 {
 	int ret;
 	uint16_t i;
+	unsigned int port_id;
 	struct rte_eth_conf port_conf = {
 		.rxmode = {
 			.max_rx_pkt_len = ETHER_MAX_LEN, /**< Default maximum frame length. */
@@ -220,48 +244,57 @@ init_port(void)
 		},
 	};
 
-	printf("initializing port: %d\n", port_id);
-	ret = rte_eth_dev_configure(port_id,
-				nr_queues, nr_queues, &port_conf);
-	if (ret < 0) {
-		rte_exit(EXIT_FAILURE,
-			":: cannot configure device: err=%d, port=%u\n",
-			ret, port_id);
-	}
-
-	for (i = 0; i < nr_queues; i++) {
-		ret = rte_eth_rx_queue_setup(port_id, i, 512,
-				     rte_eth_dev_socket_id(port_id),
-				     NULL,
-				     mbuf_pool);
+	for (port_id = 0; port_id < nb_ports; port_id ++) {
+		printf("initializing port: %d\n", port_id);
+		ret = rte_eth_dev_configure(port_id,
+					nr_queues, nr_queues, &port_conf);
 		if (ret < 0) {
 			rte_exit(EXIT_FAILURE,
-				":: Rx queue setup failed: err=%d, port=%u\n",
+				":: cannot configure device: err=%d, port=%u\n",
 				ret, port_id);
 		}
-	}
-	for (i = 0; i < nr_queues; i++) {
-		ret = rte_eth_tx_queue_setup(port_id, i, 512,
-				     rte_eth_dev_socket_id(port_id),
-				     NULL);
+
+		for (i = 0; i < nr_queues; i++) {
+			ret = rte_eth_rx_queue_setup(port_id, i, 512,
+						rte_eth_dev_socket_id(port_id),
+						NULL,
+						mbuf_pool);
+			if (ret < 0) {
+				rte_exit(EXIT_FAILURE,
+					":: Rx queue setup failed: err=%d, port=%u\n",
+					ret, port_id);
+			}
+		}
+		for (i = 0; i < nr_queues; i++) {
+			ret = rte_eth_tx_queue_setup(port_id, i, 512,
+						rte_eth_dev_socket_id(port_id),
+						NULL);
+			if (ret < 0) {
+				rte_exit(EXIT_FAILURE,
+					":: Tx queue setup failed: err=%d, port=%u\n",
+					ret, port_id);
+			}
+		}
+
+		rte_eth_dev_callback_register(port_id, RTE_ETH_EVENT_INTR_LSC, lsc_callback, NULL);
+		rte_eth_promiscuous_enable(port_id);
+		ret = rte_eth_dev_start(port_id);
 		if (ret < 0) {
 			rte_exit(EXIT_FAILURE,
-				":: Tx queue setup failed: err=%d, port=%u\n",
+				"rte_eth_dev_start:err=%d, port=%u\n",
 				ret, port_id);
 		}
-	}
 
-	rte_eth_promiscuous_enable(port_id);
-	ret = rte_eth_dev_start(port_id);
-	if (ret < 0) {
-		rte_exit(EXIT_FAILURE,
-			"rte_eth_dev_start:err=%d, port=%u\n",
-			ret, port_id);
+		ret = rte_flow_isolate(port_id, 1, NULL);
+		if (ref < 0) {
+				"rte_flow_isolate:err=%d, port=%u\n",
+				ret, port_id);			
+		}
+
 	}
 }
 
-static void
-signal_handler(int signum)
+static void signal_handler(int signum)
 {
 	if (signum == SIGINT || signum == SIGTERM) {
 		force_quit = 1;
@@ -850,7 +883,6 @@ static void main_loop(void)
 int main(int argc, char **argv)
 {
 	int ret;
-	uint8_t nr_ports;
 	struct rte_flow_error error;
 
 	signal(SIGINT, signal_handler);
@@ -869,14 +901,11 @@ int main(int argc, char **argv)
 	if (ret < 0)
 		rte_exit(EXIT_FAILURE, "Invalid arguments");
 
-	nr_ports = rte_eth_dev_count();
-	if (nr_ports == 0)
+	nb_ports = rte_eth_dev_count();
+	if (nb_ports == 0)
 		rte_exit(EXIT_FAILURE, "no Ethernet ports found\n");
-	port_id = 0;
-	//if (nr_ports != 1) {
-	//	printf("warn: %d ports detected, but we use only one: port %u\n",
-	//		nr_ports, port_id);
-	//}
+	//port_id = 0;
+
 	mbuf_pool = rte_pktmbuf_pool_create("mbuf_pool", 4096, 128, 0,
 					    RTE_MBUF_DEFAULT_BUF_SIZE,
 					    rte_socket_id());
