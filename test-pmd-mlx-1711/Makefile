@@ -31,8 +31,6 @@
 
 include $(RTE_SDK)/mk/rte.vars.mk
 
-ifeq ($(CONFIG_RTE_TEST_PMD),y)
-
 #
 # library name
 #
@@ -105,4 +103,3 @@ CFLAGS_cmdline.o := -D_GNU_SOURCE
 
 include $(RTE_SDK)/mk/rte.app.mk
 
-endif
