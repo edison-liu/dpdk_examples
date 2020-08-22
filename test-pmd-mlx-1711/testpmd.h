@@ -848,4 +848,6 @@ int stop_forwarding_on_port_rmv(portid_t port_id,
 #endif
 #endif /* __GCC__ */
 
+void add_rte_flows();
+
 #endif /* _TESTPMD_H_ */

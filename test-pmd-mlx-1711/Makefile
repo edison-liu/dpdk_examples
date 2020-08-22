@@ -69,6 +69,8 @@ ifeq ($(CONFIG_RTE_LIBRTE_PMD_SOFTNIC)$(CONFIG_RTE_LIBRTE_SCHED),yy)
 SRCS-y += tm.c
 endif
 
+SRCS-y += test_rte_flow.c
+
 LDLIBS += -lrte_vswitch
 
 ifeq ($(CONFIG_RTE_BUILD_SHARED_LIB),y)
