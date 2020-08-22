@@ -55,42 +55,42 @@
 
 
 
-static void add_vlan_flow()
+static void add_vlan_flow(void)
 {
 
 }
 
-static void add_ip_flow()
+static void add_ip_flow(void)
 {
 
 }
 
-static void add_icmp_flow()
+static void add_icmp_flow(void)
 {
 
 }
 
-static void add_udp_flow()
+static void add_udp_flow(void)
 {
 
 }
 
-static void add_tcp_flow()
+static void add_tcp_flow(void)
 {
 
 }
 
-static void add_gre_flows()
-{
-    
-}
-
-static void add_gre_flows_offload()
+static void add_gre_flows(void)
 {
     
 }
 
-void add_rte_flows()
+static void add_gre_flows_offload(void)
+{
+    
+}
+
+void add_rte_flows(void)
 {
     add_vlan_flow();
     add_ip_flow();
