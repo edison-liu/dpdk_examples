@@ -1827,7 +1827,7 @@ start_port(portid_t pid)
 		/* at least one port started, need checking link status */
 		need_check_link_status = 1;
 
-		add_rte_flows();
+		add_rte_flows(pi);
 	}
 
 	if (need_check_link_status == 1 && !no_link_check)
