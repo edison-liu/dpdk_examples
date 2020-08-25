@@ -58,8 +58,7 @@
 #define RDTSC_TIME(start) \
     ((rte_rdtsc() - start) / (float)rte_get_timer_hz())
 
-static uint16_t nr_queues = 4;
-static uint64_t nr_random_flows = 300;
+static uint64_t nr_random_flows = 3;
 //struct rte_flow *flow;
 //static struct rte_flow **perf_flows; /* Flows created. */
 //static struct rte_flow **perf_flows_random; /* Flows created. */
@@ -68,20 +67,20 @@ static uint64_t nr_random_flows = 300;
 #define RAW_ENCAP_CONFS_MAX_NUM 8
 
 /** Storage for struct rte_flow_action_raw_decap. */
-struct raw_decap_conf
+struct flow_raw_decap_conf
 {
     uint8_t data[ACTION_RAW_ENCAP_MAX_DATA];
     size_t size;
 };
 /** Storage for struct rte_flow_action_raw_encap. */
-struct raw_encap_conf
+struct flow_raw_encap_conf
 {
     uint8_t data[ACTION_RAW_ENCAP_MAX_DATA];
     uint8_t preserve[ACTION_RAW_ENCAP_MAX_DATA];
     size_t size;
 };
-struct raw_encap_conf raw_encap_confs[RAW_ENCAP_CONFS_MAX_NUM];
-struct raw_decap_conf raw_decap_confs[RAW_ENCAP_CONFS_MAX_NUM];
+struct flow_raw_encap_conf flow_raw_encap_confs[RAW_ENCAP_CONFS_MAX_NUM];
+struct flow_raw_decap_conf flow_raw_decap_confs[RAW_ENCAP_CONFS_MAX_NUM];
 
 /* */
 static void add_vlan_flow(void)
@@ -113,7 +112,7 @@ static void add_gre_flows_offload(void)
 }
 
 /* */
-static void add_simulated_flows(uint8_t port, struct rte_flow_error *error)
+static int add_simulated_flows(uint8_t port, struct rte_flow_error *error)
 {
     uint64_t start;
     uint64_t uport = 0;
@@ -246,11 +245,11 @@ static void add_simulated_flows(uint8_t port, struct rte_flow_error *error)
     struct rte_flow_action_raw_encap encap_raw = {
         .data = NULL,
         .preserve = NULL,
-        .size = raw_encap_confs[0].size,
+        .size = flow_raw_encap_confs[0].size,
     };
     struct rte_flow_action_raw_decap decap_raw = {
-        .data = raw_decap_confs[1].data,
-        .size = raw_decap_confs[1].size,
+        .data = flow_raw_decap_confs[1].data,
+        .size = flow_raw_decap_confs[1].size,
     };
 
     struct rte_flow_item_meta rmeta = {
@@ -375,8 +374,7 @@ static void add_simulated_flows(uint8_t port, struct rte_flow_error *error)
     mark.id = 0x123456;
     o_ip.hdr.dst_addr = RTE_BE32(IPv4(10, 10, 0, 10));
 
-    printf("Creating test GRE flow:%p, %lu\n", perf_flows, flow_per_round);
-    start = rte_rdtsc();
+    printf("Creating test GRE flow\n");
     //for (i = 0, idx = 0; i < flow_per_round; ++i) {
     attr.group = 1;
     attr.priority = 0;
@@ -462,11 +460,7 @@ static void add_simulated_flows(uint8_t port, struct rte_flow_error *error)
     meta.data = rte_be_to_cpu_32(meta.data) + 1;
     meta.data = rte_be_to_cpu_32(meta.data);
 
-    printf("Total %u, time: %f sec\n",
-           (unsigned int)idx, RDTSC_TIME(start));
-
     printf("Creating test random GRE flow: %lu\n", nr_random_flows);
-    start = rte_rdtsc();
     for (i = 0, idx = 0; i < nr_random_flows; ++i)
     {
         attr.group = 1;
@@ -512,6 +506,7 @@ static void add_simulated_flows(uint8_t port, struct rte_flow_error *error)
 /* */
 void add_rte_flows(void)
 {
+    int ret = 0;
     struct rte_flow_error error;
 
     add_vlan_flow();

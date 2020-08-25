@@ -103,6 +103,15 @@ pkt_burst_io_forward(struct fwd_stream *fs)
 	if (unlikely(verbose_level & 0x1))
 		dump_pkt_burst(fs, pkts_burst, nb_rx, 1);
 
+        for (i = 0; i < (uint32_t)nb_rx; i++) {
+            if (likely(i < (uint32_t)nb_rx - 1))
+                rte_prefetch0(rte_pktmbuf_mtod(pkts_burst[i + 1],
+                                   void *));
+            pkts_burst[i]->udata64 = 0x12345678;
+            //printf("iofwd: set meta %016lX\n", pkts_burst[i]->udata64);
+
+        }
+
 	if (vswitch_enable) {
 		for (i = 0; i < (uint32_t)nb_rx; i++) {
 			if (likely(i < (uint32_t)nb_rx - 1))
