@@ -63,6 +63,7 @@
 #include <rte_ethdev.h>
 #include <rte_string_fns.h>
 #include <rte_flow.h>
+#include <rte_gre.h>
 
 #include "testpmd.h"
 
@@ -94,9 +95,8 @@ static void handle_burst(struct rte_mbuf **pkts_burst, uint16_t nb_rx)
 		tmp = in_ipv4_hdr->src_addr;
 		in_ipv4_hdr->src_addr = in_ipv4_hdr->dst_addr;
 		in_ipv4_hdr->dst_addr = tmp;
-		printf("Inner IP %08x -> %08x\n", in_ipv4_hdr->src_addr, in_ipv4_hdr->dst_addr);
+		//printf("Inner IP %08x -> %08x\n", in_ipv4_hdr->src_addr, in_ipv4_hdr->dst_addr);
 	}
-
 }
 
 

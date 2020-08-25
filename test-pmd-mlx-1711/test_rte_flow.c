@@ -523,6 +523,178 @@ static int add_ingress_udp_flow(uint8_t port, uint32_t key, uint32_t in_sip, uin
 	return 0;
 }
 
+static int add_ingress_tcp_flow(uint8_t port, uint32_t key, uint32_t in_sip, uint32_t in_dip, 
+				uint16_t in_sport, uint16_t in_dport, uint32_t flow_mark,
+				struct rte_flow_error *error)
+{
+	struct rte_flow *flow = NULL;
+
+    struct rte_flow_action_raw_encap encap_raw = {
+        .data = NULL,
+        .preserve = NULL,
+        .size = flow_raw_encap_confs[0].size,
+    };
+    struct rte_flow_action_raw_decap decap_raw = {
+        .data = flow_raw_decap_confs[1].data,
+        .size = flow_raw_decap_confs[1].size,
+    };
+
+    struct _raw_encap_gre_
+    {
+        struct rte_flow_item_eth eth;
+        struct rte_flow_item_ipv4 ipv4;
+        struct rte_flow_item_gre gre;
+        struct rte_flow_item_gre_opt_key gre_key;
+    } __rte_packed;
+    struct _raw_encap_eth_
+    {
+        struct rte_flow_item_eth eth;
+    } __rte_packed;
+    struct _raw_encap_gre_ raw_encap_gre = {
+        .eth = {
+            .src = {
+                .addr_bytes = {0x10, 0x20, 0x30, 0x40, 0x50, 0x60},
+            },
+            .dst = {
+                .addr_bytes = {0xa0, 0xb0, 0xc0, 0xd0, 0xe0, 0xf2},
+            },
+            .type = RTE_BE16(0x0800),
+        },
+        .ipv4 = {.hdr = {
+                     .src_addr = RTE_BE32(IPv4(10, 10, 0, 11)),
+                     .dst_addr = RTE_BE32(IPv4(10, 0, 0, 11)),
+                     .next_proto_id = 47,
+                     .version_ihl = 0x45,
+                     .time_to_live = 33,
+                 }},
+        .gre = {
+            .protocol = RTE_BE16(0x0800),
+            .c_rsvd0_ver = RTE_BE16(0x2000),
+        },
+    };
+    struct _raw_encap_eth_ raw_encap_eth = {
+        .eth = {
+            .src = {
+                .addr_bytes = {0x10, 0x22, 0x33, 0x44, 0x55, 0x60},
+            },
+            .dst = {
+                .addr_bytes = {0xa0, 0xbb, 0xcc, 0xdd, 0xee, 0xf2},
+            },
+            .type = RTE_BE16(0x0800),
+        },
+    };
+    struct rte_flow_item_gre i_gre = {
+        .protocol = RTE_BE16(ETHER_TYPE_IPv4),
+    };
+    struct rte_flow_item_gre_opt_key i_gre_key = {
+        .key = key,
+    };
+
+    struct rte_flow_item_ipv4 i_ipc = {
+        .hdr = {
+            .src_addr = RTE_BE32(in_sip),
+            .dst_addr = RTE_BE32(in_dip),
+        }};
+
+    struct rte_flow_item_tcp i_tcp = {
+        .hdr = {
+            .src_port = in_sport,
+            .dst_port = in_dport,
+        },
+    };
+    struct rte_flow_item_tcp i_tcp_mask = {
+        .hdr = {
+            .src_port = RTE_BE16(0xFFFF),
+            .dst_port = RTE_BE16(0xFFFF),
+        },
+    };
+
+    struct rte_flow_action_mark mark = {
+        .id = flow_mark};
+    static struct rte_eth_rss_conf rss_conf = {
+        .rss_key = NULL,
+        .rss_key_len = 0,
+        .rss_hf = ETH_RSS_IP,
+        .rss_level = 0,
+    };
+    union
+    {
+        struct rte_flow_action_rss rss;
+        struct
+        {
+            const struct rte_eth_rss_conf *rss_conf;
+            uint16_t num;
+            uint16_t queues[4];
+        } local;
+    } rss = {
+        .local = {
+            .rss_conf = &rss_conf,
+            .num = 4,
+            .queues = {0, 1, 2, 3},
+        },
+    };
+
+    struct rte_flow_attr attr = {
+        .ingress = 1,
+        .egress = 0,
+        .group = 1,
+        .priority = 0,
+    };
+
+	struct rte_flow_item *patterns = NULL;
+	struct rte_flow_action *actions = NULL;
+
+    encap_raw.data = (uint8_t *)&raw_encap_eth;
+    encap_raw.size = sizeof(raw_encap_eth);
+    decap_raw.data = (uint8_t *)&raw_encap_gre;
+    decap_raw.size = sizeof(raw_encap_gre);
+    i_udp.hdr.src_port = RTE_BE16(10000);
+    i_udp.hdr.dst_port = RTE_BE16(20000);
+    patterns = (struct rte_flow_item[]){
+        {.type = RTE_FLOW_ITEM_TYPE_ETH},
+        {.type = RTE_FLOW_ITEM_TYPE_IPV4},
+        {.type = RTE_FLOW_ITEM_TYPE_GRE,
+         .spec = &i_gre,
+         .mask = &rte_flow_item_gre_mask},
+        {.type = RTE_FLOW_ITEM_TYPE_GRE_OPT_KEY,
+         .spec = &i_gre_key,
+         .mask = &rte_flow_item_gre_opt_key_mask},
+        {.type = RTE_FLOW_ITEM_TYPE_IPV4,
+         .spec = &i_ipc,
+         .mask = &rte_flow_item_ipv4_mask},
+        {.type = RTE_FLOW_ITEM_TYPE_TCP,
+         .spec = &i_tcp,
+         .mask = &i_tcp_mask},
+        {.type = RTE_FLOW_ITEM_TYPE_END},
+    };
+
+    actions = (struct rte_flow_action[]){
+        {.type = RTE_FLOW_ACTION_TYPE_MARK,
+         .conf = &mark},
+        {.type = RTE_FLOW_ACTION_TYPE_RAW_DECAP,
+         .conf = &decap_raw},
+        {.type = RTE_FLOW_ACTION_TYPE_RAW_ENCAP,
+         .conf = &encap_raw},
+        {.type = RTE_FLOW_ACTION_TYPE_RSS,
+         .conf = &rss},
+        {.type = RTE_FLOW_ACTION_TYPE_COUNT},
+        {.type = RTE_FLOW_ACTION_TYPE_END},
+    };
+
+    flow = rte_flow_create(port, &attr,
+                           patterns, actions, error);
+    if (!flow)
+    {
+        printf("Error create ingress group 1 flow for port %d\n", port);
+        return -1;
+    }
+	port_add_externel_flow(port, &attr, patterns, actions, flow);
+
+	printf("Added ingress TCP flow for port %d\n", port);
+	return 0;
+}
+
+
 static int add_egress_encap_flow(uint8_t port, uint32_t flow_meta, uint32_t out_sip, uint32_t out_dip, struct rte_flow_error *error)
 {
     struct rte_flow_action_raw_encap encap_raw = {
