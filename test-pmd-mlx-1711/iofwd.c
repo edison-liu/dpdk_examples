@@ -95,8 +95,8 @@ static void handle_burst(struct rte_mbuf **pkts_burst, uint16_t nb_rx)
 		tmp = in_ipv4_hdr->src_addr;
 		in_ipv4_hdr->src_addr = in_ipv4_hdr->dst_addr;
 		in_ipv4_hdr->dst_addr = tmp;
-		printf("Outer IP %08x -> %08x\n", RTE_BE32(out_ipv4_hdr->src_addr), RTE_BE32(out_ipv4_hdr->dst_addr));
-		printf("Inner IP %08x -> %08x\n", RTE_BE32(in_ipv4_hdr->src_addr), RTE_BE32(in_ipv4_hdr->dst_addr));
+		//printf("Outer IP %08x -> %08x\n", RTE_BE32(out_ipv4_hdr->src_addr), RTE_BE32(out_ipv4_hdr->dst_addr));
+		//printf("Inner IP %08x -> %08x\n", RTE_BE32(in_ipv4_hdr->src_addr), RTE_BE32(in_ipv4_hdr->dst_addr));
 	}
 }
 
