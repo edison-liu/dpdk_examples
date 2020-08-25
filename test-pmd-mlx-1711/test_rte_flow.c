@@ -201,7 +201,6 @@ static int add_egress_jump_flow(uint8_t port, struct rte_flow_error *error)
     };
 
     struct rte_flow_item *jump_patterns = NULL;
-    struct rte_flow_action jump_actions[2];
 
     /* egress jump flow */
     jump_patterns = (struct rte_flow_item[]){
@@ -318,7 +317,6 @@ static int add_ingress_jump_flow(uint8_t port, uint32_t sip, uint32_t dip, struc
     };
 
     struct rte_flow_item *jump_patterns = NULL;
-    struct rte_flow_action jump_actions[2];
 
     jump_patterns = (struct rte_flow_item[]){
         {.type = RTE_FLOW_ITEM_TYPE_ETH},
@@ -682,7 +680,7 @@ static int add_random_flow(uint8_t port, struct rte_flow_error *error)
         .priority = 0
     };
 
-	int i;
+    unsigned int i;
     for (i = 0; i < nr_random_flows; ++i)
     {
         encap_raw.data = (uint8_t *)&raw_encap_gre;
@@ -707,7 +705,7 @@ static int add_random_flow(uint8_t port, struct rte_flow_error *error)
                                patterns, actions, error);
         if (!flow)
         {
-            printf("Error create random flow [%" PRIu64 "]:"
+            printf("Error create random flow [%d]:"
                    "%s\n",
                    i, error->message);
             return -1;
@@ -717,7 +715,7 @@ static int add_random_flow(uint8_t port, struct rte_flow_error *error)
         rmeta.data = rte_be_to_cpu_32(rmeta.data);
     }
 
-	printf("Created test %d random GRE flows for port %d\n", nr_random_flows, port);
+	printf("Created test %lu random GRE flows for port %d\n", nr_random_flows, port);
 	return 0;
 }
 
@@ -1116,13 +1114,13 @@ static int add_simulated_flows(uint8_t port, struct rte_flow_error *error)
     }
 #endif	
 
-	add_ingress_default_flow(port, &error);
-	add_egress_jump_flow(port, &error);
-	add_ingress_miss_flow(port, &error);
-	add_ingress_jump_flow(port, IPv4(169, 254, 0, 47), IPv4(10, 0, 0, 7), &error);
-	add_ingress_udp_flow(port, &error);
-	add_egress_encap_flow(port, &error);
-	add_random_flow(port, &error);
+	add_ingress_default_flow(port, error);
+	add_egress_jump_flow(port, error);
+	add_ingress_miss_flow(port, error);
+	add_ingress_jump_flow(port, IPv4(169, 254, 0, 47), IPv4(10, 0, 0, 7), error);
+	add_ingress_udp_flow(port, error);
+	add_egress_encap_flow(port, error);
+	//add_random_flow(port, error);
 
     return 0;
 }
