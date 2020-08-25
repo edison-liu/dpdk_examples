@@ -1365,6 +1365,51 @@ port_flow_create(portid_t port_id,
 	return 0;
 }
 
+/** Add external flow rule. */
+int port_add_externel_flow(portid_t port_id,
+		 const struct rte_flow_attr *attr,
+		 const struct rte_flow_item *pattern,
+		 const struct rte_flow_action *actions,
+		 struct rte_flow *flow)
+{
+	struct rte_flow *flow;
+	struct rte_port *port;
+	struct port_flow *pf;
+	uint32_t id;
+	struct rte_flow_error error;
+
+	/* Poisoning to make sure PMDs update it in case of error. */
+	memset(&error, 0x22, sizeof(error));
+	if (!flow)
+		return port_flow_complain(&error);
+	port = &ports[port_id];
+	if (port->flow_list) {
+		if (port->flow_list->id == UINT32_MAX) {
+			printf("Highest rule ID is already assigned, delete"
+			       " it first");
+			rte_flow_destroy(port_id, flow, NULL);
+			return -ENOMEM;
+		}
+		id = port->flow_list->id + 1;
+	} else
+		id = 0;
+	pf = port_flow_new(attr, pattern, actions);
+	if (!pf) {
+		int err = rte_errno;
+
+		printf("Cannot allocate flow: %s\n", rte_strerror(err));
+		rte_flow_destroy(port_id, flow, NULL);
+		return -err;
+	}
+	pf->next = port->flow_list;
+	pf->id = id;
+	pf->flow = flow;
+	port->flow_list = pf;
+	if (!(verbose_level & 0x8000))
+		printf("Flow rule #%u created\n", pf->id);
+	return 0;
+}
+
 /** Destroy a number of flow rules. */
 int
 port_flow_destroy(portid_t port_id, uint32_t n, const uint32_t *rule)
