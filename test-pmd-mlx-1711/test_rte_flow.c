@@ -504,7 +504,7 @@ static int add_simulated_flows(uint8_t port, struct rte_flow_error *error)
 }
 
 /* */
-void add_rte_flows(void)
+void add_rte_flows(portid_t pi)
 {
     int ret = 0;
     struct rte_flow_error error;
@@ -518,7 +518,7 @@ void add_rte_flows(void)
     add_gre_flows_offload();
 
     /* create multiple flow */
-    ret = add_simulated_flows(0, &error);
+    ret = add_simulated_flows(pi, &error);
     if (ret < 0)
     {
         printf("Flow can't be created %d message: %s\n",

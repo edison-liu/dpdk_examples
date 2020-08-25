@@ -830,7 +830,7 @@ int stop_forwarding_on_port_rmv(portid_t port_id,
 				enum rte_eth_event_type type,
 				void *param, void *ret_param);
 
-void add_rte_flows(void);
+void add_rte_flows(portid_t pi);
 
 /*
  * Work-around of a compilation error with ICC on invocations of the
