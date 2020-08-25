@@ -217,6 +217,8 @@ static int add_egress_jump_flow(uint8_t port, uint32_t flow_meta, struct rte_flo
         return -1;
     }
 
+	port_add_externel_flow(port, &attr, jump_patterns, jump_actions, flow);
+
 	printf("Added egress jump flow for port %d\n", port);
 	return 0;
 }
@@ -605,6 +607,7 @@ static int add_egress_encap_flow(uint8_t port, uint32_t flow_meta, uint32_t out_
         printf("Error create egress encap flow : %s\n", error->message);
         return -1;
     }
+	port_add_externel_flow(port, &attr, patterns, actions, flow);
 
 	printf("Created egress encap flow for port %d\n", port);
 	return 0;
