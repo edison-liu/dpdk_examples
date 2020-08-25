@@ -58,7 +58,7 @@
 #define RDTSC_TIME(start) \
     ((rte_rdtsc() - start) / (float)rte_get_timer_hz())
 
-static uint64_t nr_random_flows = 3;
+static uint64_t nr_random_flows = 0;
 //struct rte_flow *flow;
 //static struct rte_flow **perf_flows; /* Flows created. */
 //static struct rte_flow **perf_flows_random; /* Flows created. */
@@ -282,7 +282,7 @@ static int add_simulated_flows(uint8_t port, struct rte_flow_error *error)
         printf("Error create default flow:%s\n", error->message);
         return -1;
     }
-    printf("Created ingress default flow:%p\n", default_flow);
+    printf("1. Created ingress default flow:%p\n", default_flow);
 
     i_ipc.hdr.src_addr = RTE_BE32(IPv4(192, 168, 0, 1));
     i_ipc.hdr.dst_addr = RTE_BE32(IPv4(192, 168, 10, 1));
@@ -311,7 +311,7 @@ static int add_simulated_flows(uint8_t port, struct rte_flow_error *error)
         return -1;
     }
     //flow_perf_dump(&attr, jump_patterns, jump_actions);
-    printf("Created egress jump flow:%p\n", egress_jump_flow);
+    printf("2. Created egress jump flow:%p\n", egress_jump_flow);
 
     //stats.created++;
     //if (!group_miss_flow) {
@@ -343,7 +343,7 @@ static int add_simulated_flows(uint8_t port, struct rte_flow_error *error)
     //	stats.created++;
 
     //flow_perf_dump(&attr, patterns, actions);
-    printf("Create ingress group miss flow:%p\n", group_miss_flow);
+    printf("3. Create ingress group miss flow:%p\n", group_miss_flow);
     //}
 
     /* ingress jump flow */
@@ -368,13 +368,13 @@ static int add_simulated_flows(uint8_t port, struct rte_flow_error *error)
         return -1;
     }
     //stats.created++;
-    printf("Created ingress group jump flow:%p\n", ingress_jump_flow);
+    printf("4. Created ingress group jump flow:%p\n", ingress_jump_flow);
 
     uint64_t i, idx;
     mark.id = 0x123456;
     o_ip.hdr.dst_addr = RTE_BE32(IPv4(10, 10, 0, 10));
 
-    printf("Creating test GRE flow\n");
+    printf("5. Creating test GRE flow\n");
     //for (i = 0, idx = 0; i < flow_per_round; ++i) {
     attr.group = 1;
     attr.priority = 0;
@@ -460,7 +460,7 @@ static int add_simulated_flows(uint8_t port, struct rte_flow_error *error)
     meta.data = rte_be_to_cpu_32(meta.data) + 1;
     meta.data = rte_be_to_cpu_32(meta.data);
 
-    printf("Creating test random GRE flow: %lu\n", nr_random_flows);
+    printf("6. Creating test random GRE flow: %lu\n", nr_random_flows);
     for (i = 0, idx = 0; i < nr_random_flows; ++i)
     {
         attr.group = 1;
