@@ -175,6 +175,8 @@ static int add_ingress_default_flow(uint8_t port, struct rte_flow_error *error)
 
 static int add_egress_jump_flow(uint8_t port, struct rte_flow_error *error)
 {
+    struct rte_flow_action jump_actions[2];
+
     struct rte_flow_action_jump jump = {
         .group = 1,
     };
@@ -287,6 +289,8 @@ static int add_ingress_miss_flow(uint8_t port, struct rte_flow_error *error)
 
 static int add_ingress_jump_flow(uint8_t port, uint32_t sip, uint32_t dip, struct rte_flow_error *error)
 {
+	struct rte_flow_action jump_actions[2];
+
     struct rte_flow_item_ipv4 o_ip = {
         .hdr = {
             .src_addr = RTE_BE32(sip),
