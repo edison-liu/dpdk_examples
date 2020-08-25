@@ -339,7 +339,9 @@ static int add_ingress_jump_flow(uint8_t port, uint32_t sip, uint32_t dip, struc
 	return 0;
 }
 
-static int add_ingress_udp_flow(uint8_t port, struct rte_flow_error *error)
+static int add_ingress_udp_flow(uint8_t port, uint32_t key, uint32_t in_sip, uint32_t in_dip, 
+				uint16_t in_sport, uint16_t in_dport, uint32_t mark,
+				struct rte_flow_error *error)
 {
 	struct rte_flow *flow = NULL;
 
@@ -401,19 +403,19 @@ static int add_ingress_udp_flow(uint8_t port, struct rte_flow_error *error)
         .protocol = RTE_BE16(ETHER_TYPE_IPv4),
     };
     struct rte_flow_item_gre_opt_key i_gre_key = {
-        .key = RTE_BE32(1),
+        .key = key,
     };
 
     struct rte_flow_item_ipv4 i_ipc = {
         .hdr = {
-            .src_addr = RTE_BE32(IPv4(10, 10, 0, 1)),
-            .dst_addr = RTE_BE32(IPv4(10, 10, 0, 2)),
+            .src_addr = RTE_BE32(in_sip),
+            .dst_addr = RTE_BE32(in_dip),
         }};
 
     struct rte_flow_item_udp i_udp = {
         .hdr = {
-            .src_port = RTE_BE16(10000),
-            .dst_port = RTE_BE16(20000),
+            .src_port = in_sip,
+            .dst_port = in_dip,
         },
     };
     struct rte_flow_item_udp i_udp_mask = {
@@ -424,7 +426,7 @@ static int add_ingress_udp_flow(uint8_t port, struct rte_flow_error *error)
     };
 
     struct rte_flow_action_mark mark = {
-        .id = 0x123456};
+        .id = mark};
     static struct rte_eth_rss_conf rss_conf = {
         .rss_key = NULL,
         .rss_key_len = 0,
@@ -726,8 +728,9 @@ static int add_simulated_flows(uint8_t port, struct rte_flow_error *error)
 	add_ingress_default_flow(port, error);
 	add_egress_jump_flow(port, error);
 	add_ingress_miss_flow(port, error);
-	add_ingress_jump_flow(port, IPv4(169, 254, 0, 47), IPv4(10, 0, 0, 7), error);
-	add_ingress_udp_flow(port, error);
+	add_ingress_jump_flow(port, IPv4(10, 10, 0, 1), IPv4(10, 10, 0, 2), error);
+	add_ingress_udp_flow(port, RTE_BE32(1), IPv4(169, 254, 0, 47), IPv4(10, 0, 0, 7), 
+		RTE_BE16(10000), RTE_BE16(20000), 123456, error);
 	add_egress_encap_flow(port, error);
 	//add_random_flow(port, error);
 
