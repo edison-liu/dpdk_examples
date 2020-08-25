@@ -95,7 +95,8 @@ static void handle_burst(struct rte_mbuf **pkts_burst, uint16_t nb_rx)
 		tmp = in_ipv4_hdr->src_addr;
 		in_ipv4_hdr->src_addr = in_ipv4_hdr->dst_addr;
 		in_ipv4_hdr->dst_addr = tmp;
-		printf("Inner IP %08x -> %08x\n", in_ipv4_hdr->src_addr, in_ipv4_hdr->dst_addr);
+		printf("Outer IP %08x -> %08x\n", RTE_BE32(out_ipv4_hdr->src_addr), RTE_BE32(out_ipv4_hdr->dst_addr));
+		printf("Inner IP %08x -> %08x\n", RTE_BE32(in_ipv4_hdr->src_addr), RTE_BE32(in_ipv4_hdr->dst_addr));
 	}
 }
 
@@ -136,34 +137,7 @@ pkt_burst_io_forward(struct fwd_stream *fs)
 	if (unlikely(verbose_level & 0x1))
 		dump_pkt_burst(fs, pkts_burst, nb_rx, 1);
 
-	//handle_burst(pkts_burst, nb_rx);
-	{
-		uint32_t i, tmp;
-		struct ether_hdr *out_eth_hdr;
-		struct ipv4_hdr *out_ipv4_hdr, *in_ipv4_hdr;
-		struct gre_hdr *gre_hdr;
-	
-		for (i = 0; i < (uint32_t)nb_rx; i++) {
-			if (likely(i < (uint32_t)nb_rx - 1))
-				rte_prefetch0(rte_pktmbuf_mtod(pkts_burst[i + 1],
-								   void *));
-			pkts_burst[i]->udata32 = RTE_BE32(0x12345678);
-			pkts_burst[i]->ol_flags |= PKT_TX_METADATA;
-		
-			/* swap src and dst IP */
-			out_eth_hdr = rte_pktmbuf_mtod(pkts_burst[i], struct ether_hdr *);
-			out_ipv4_hdr = rte_pktmbuf_mtod_offset(pkts_burst[i], struct ipv4_hdr *,
-							   sizeof(struct ether_hdr));
-			gre_hdr = rte_pktmbuf_mtod_offset(pkts_burst[i], struct gre_hdr *,
-							   sizeof(struct gre_hdr));
-			in_ipv4_hdr = rte_pktmbuf_mtod_offset(pkts_burst[i], struct ipv4_hdr *,
-							   sizeof(struct ether_hdr));
-			tmp = in_ipv4_hdr->src_addr;
-			in_ipv4_hdr->src_addr = in_ipv4_hdr->dst_addr;
-			in_ipv4_hdr->dst_addr = tmp;
-			printf("Inner IP %08x -> %08x\n", in_ipv4_hdr->src_addr, in_ipv4_hdr->dst_addr);
-		}
-	}
+	handle_burst(pkts_burst, nb_rx);
 
 	if (vswitch_enable) {
 		for (i = 0; i < (uint32_t)nb_rx; i++) {
