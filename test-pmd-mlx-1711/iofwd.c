@@ -107,7 +107,8 @@ pkt_burst_io_forward(struct fwd_stream *fs)
             if (likely(i < (uint32_t)nb_rx - 1))
                 rte_prefetch0(rte_pktmbuf_mtod(pkts_burst[i + 1],
                                    void *));
-            pkts_burst[i]->udata32 = 0x12345678;
+            pkts_burst[i]->udata32 = RTE_BE32(0x12345678);
+            pkts_burst[i]->ol_flags |= PKT_TX_METADATA;
             //printf("iofwd: set meta %016lX\n", pkts_burst[i]->udata64);
 
         }
