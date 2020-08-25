@@ -427,8 +427,8 @@ static int add_ingress_udp_flow(uint8_t port, uint32_t key, uint32_t in_sip, uin
 
     struct rte_flow_item_udp i_udp = {
         .hdr = {
-            .src_port = in_sport,
-            .dst_port = in_dport,
+            .src_port = RTE_BE16(in_sport),
+            .dst_port = RTE_BE16(in_dport),
         },
     };
     struct rte_flow_item_udp i_udp_mask = {
@@ -477,8 +477,6 @@ static int add_ingress_udp_flow(uint8_t port, uint32_t key, uint32_t in_sip, uin
     encap_raw.size = sizeof(raw_encap_eth);
     decap_raw.data = (uint8_t *)&raw_encap_gre;
     decap_raw.size = sizeof(raw_encap_gre);
-    i_udp.hdr.src_port = RTE_BE16(10000);
-    i_udp.hdr.dst_port = RTE_BE16(20000);
     patterns = (struct rte_flow_item[]){
         {.type = RTE_FLOW_ITEM_TYPE_ETH},
         {.type = RTE_FLOW_ITEM_TYPE_IPV4},
@@ -598,8 +596,8 @@ static int add_ingress_tcp_flow(uint8_t port, uint32_t key, uint32_t in_sip, uin
 
     struct rte_flow_item_tcp i_tcp = {
         .hdr = {
-            .src_port = in_sport,
-            .dst_port = in_dport,
+            .src_port = RTE_BE16(in_sport),
+            .dst_port = RTE_BE16(in_dport),
         },
     };
     struct rte_flow_item_tcp i_tcp_mask = {
@@ -648,8 +646,6 @@ static int add_ingress_tcp_flow(uint8_t port, uint32_t key, uint32_t in_sip, uin
     encap_raw.size = sizeof(raw_encap_eth);
     decap_raw.data = (uint8_t *)&raw_encap_gre;
     decap_raw.size = sizeof(raw_encap_gre);
-    i_udp.hdr.src_port = RTE_BE16(10000);
-    i_udp.hdr.dst_port = RTE_BE16(20000);
     patterns = (struct rte_flow_item[]){
         {.type = RTE_FLOW_ITEM_TYPE_ETH},
         {.type = RTE_FLOW_ITEM_TYPE_IPV4},
