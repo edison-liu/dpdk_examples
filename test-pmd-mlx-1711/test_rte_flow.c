@@ -173,7 +173,7 @@ static int add_ingress_default_flow(uint8_t port, struct rte_flow_error *error)
 	return 0;
 }
 
-static int add_egress_jump_flow(uint8_t port, struct rte_flow_error *error)
+static int add_egress_jump_flow(uint8_t port, uint32_t flow_meta, struct rte_flow_error *error)
 {
     struct rte_flow_action jump_actions[2];
 
@@ -189,7 +189,7 @@ static int add_egress_jump_flow(uint8_t port, struct rte_flow_error *error)
     };
 
     struct rte_flow_item_meta meta = {
-        .data = RTE_BE32(0x1),
+        .data = flow_meta,
     };
 
 	struct rte_flow *flow = NULL;
@@ -508,7 +508,7 @@ static int add_ingress_udp_flow(uint8_t port, uint32_t key, uint32_t in_sip, uin
 	return 0;
 }
 
-static int add_egress_encap_flow(uint8_t port, struct rte_flow_error *error)
+static int add_egress_encap_flow(uint8_t port, uint32_t flow_meta, uint32_t out_sip, uint32_t out_dip, struct rte_flow_error *error)
 {
     struct rte_flow_action_raw_encap encap_raw = {
         .data = NULL,
@@ -566,7 +566,7 @@ static int add_egress_encap_flow(uint8_t port, struct rte_flow_error *error)
     };
 
     struct rte_flow_item_meta meta = {
-        .data = RTE_BE32(8000000),
+        .data = flow_meta,
     };
 
 	struct rte_flow *flow = NULL;
@@ -726,12 +726,12 @@ static int add_random_flow(uint8_t port, struct rte_flow_error *error)
 static int add_simulated_flows(uint8_t port, struct rte_flow_error *error)
 {
 	add_ingress_default_flow(port, error);
-	add_egress_jump_flow(port, error);
+	add_egress_jump_flow(port, RTE_BE32(0x12345678), error);
 	add_ingress_miss_flow(port, error);
 	add_ingress_jump_flow(port, IPv4(10, 10, 0, 1), IPv4(10, 10, 0, 2), error);
 	add_ingress_udp_flow(port, RTE_BE32(1), IPv4(169, 254, 0, 47), IPv4(10, 0, 0, 7), 
 		RTE_BE16(10000), RTE_BE16(20000), 123456, error);
-	add_egress_encap_flow(port, error);
+	add_egress_encap_flow(port, RTE_BE32(0x12345678), IPv4(10, 10, 0, 2), IPv4(10, 10, 0, 1), error);
 	//add_random_flow(port, error);
 
     return 0;
