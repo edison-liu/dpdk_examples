@@ -1372,7 +1372,6 @@ int port_add_externel_flow(portid_t port_id,
 		 const struct rte_flow_action *actions,
 		 struct rte_flow *flow)
 {
-	struct rte_flow *flow;
 	struct rte_port *port;
 	struct port_flow *pf;
 	uint32_t id;
