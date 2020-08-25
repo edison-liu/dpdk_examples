@@ -297,7 +297,7 @@ static int add_ingress_miss_flow(uint8_t port, struct rte_flow_error *error)
 
 static int add_ingress_jump_flow(uint8_t port, uint32_t sip, uint32_t dip, struct rte_flow_error *error)
 {
-	struct rte_flow_action jump_actions[2];
+	struct rte_flow_action jump_actions[3];
 
     struct rte_flow_item_ipv4 o_ip = {
         .hdr = {
@@ -312,10 +312,10 @@ static int add_ingress_jump_flow(uint8_t port, uint32_t sip, uint32_t dip, struc
         .type = RTE_FLOW_ACTION_TYPE_JUMP,
         .conf = &jump,
     };
-    //jump_actions[1] = (struct rte_flow_action){
-    //    .type = RTE_FLOW_ACTION_TYPE_COUNT,
-    //};
     jump_actions[1] = (struct rte_flow_action){
+        .type = RTE_FLOW_ACTION_TYPE_COUNT,
+    };
+    jump_actions[2] = (struct rte_flow_action){
         .type = RTE_FLOW_ACTION_TYPE_END,
     };
 
