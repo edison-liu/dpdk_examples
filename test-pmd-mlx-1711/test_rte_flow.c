@@ -168,6 +168,7 @@ static int add_ingress_default_flow(uint8_t port, struct rte_flow_error *error)
         printf("Error create default flow:%s\n", error->message);
         return -1;
     }
+	port_add_externel_flow(port, &attr, patterns, actions, flow);
 
 	printf("Added ingress default flow for port %d\n", port);
 	return 0;
@@ -283,6 +284,7 @@ static int add_ingress_miss_flow(uint8_t port, struct rte_flow_error *error)
                error->message);
         return -1;
     }
+	port_add_externel_flow(port, &attr, patterns, actions, flow);
 
 	printf("Added ingress miss flow for port %d\n", port);
 	return 0;
@@ -336,6 +338,7 @@ static int add_ingress_jump_flow(uint8_t port, uint32_t sip, uint32_t dip, struc
                error->message);
         return -1;
     }
+	port_add_externel_flow(port, &attr, jump_patterns, jump_actions, flow);
 
 	printf("Added ingress jump flow for port %d\n", port);
 	return 0;
@@ -505,6 +508,7 @@ static int add_ingress_udp_flow(uint8_t port, uint32_t key, uint32_t in_sip, uin
         printf("Error create ingress group 1 flow for port %d\n", port);
         return -1;
     }
+	port_add_externel_flow(port, &attr, patterns, actions, flow);
 
 	printf("Added ingress UDP flow for port %d\n", port);
 	return 0;
@@ -715,6 +719,7 @@ static int add_random_flow(uint8_t port, struct rte_flow_error *error)
                    i, error->message);
             return -1;
         }
+		port_add_externel_flow(port, &attr, patterns, actions, flow);
 
         rmeta.data = rte_be_to_cpu_32(rmeta.data) + 1;
         rmeta.data = rte_be_to_cpu_32(rmeta.data);
