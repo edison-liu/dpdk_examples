@@ -159,6 +159,7 @@ static int add_ingress_default_flow(uint8_t port, struct rte_flow_error *error)
     actions = (struct rte_flow_action[]){
         {.type = RTE_FLOW_ACTION_TYPE_RSS,
          .conf = &rss},
+        {.type = RTE_FLOW_ACTION_TYPE_COUNT},
         {.type = RTE_FLOW_ACTION_TYPE_END},
     };
     flow = rte_flow_create(port, &attr, patterns,
@@ -185,7 +186,6 @@ static int add_egress_jump_flow(uint8_t port, uint32_t flow_meta, struct rte_flo
         .type = RTE_FLOW_ACTION_TYPE_JUMP,
         .conf = &jump,
     };
-	
     jump_actions[1] = (struct rte_flow_action){
         .type = RTE_FLOW_ACTION_TYPE_COUNT,
     };
@@ -277,6 +277,7 @@ static int add_ingress_miss_flow(uint8_t port, struct rte_flow_error *error)
     actions = (struct rte_flow_action[]){
         {.type = RTE_FLOW_ACTION_TYPE_RSS,
          .conf = &rss},
+        {.type = RTE_FLOW_ACTION_TYPE_COUNT},
         {.type = RTE_FLOW_ACTION_TYPE_END},
     };
 
@@ -312,6 +313,9 @@ static int add_ingress_jump_flow(uint8_t port, uint32_t sip, uint32_t dip, struc
         .conf = &jump,
     };
     jump_actions[1] = (struct rte_flow_action){
+        .type = RTE_FLOW_ACTION_TYPE_COUNT,
+    };
+    jump_actions[2] = (struct rte_flow_action){
         .type = RTE_FLOW_ACTION_TYPE_END,
     };
 
@@ -502,6 +506,7 @@ static int add_ingress_udp_flow(uint8_t port, uint32_t key, uint32_t in_sip, uin
          .conf = &encap_raw},
         {.type = RTE_FLOW_ACTION_TYPE_RSS,
          .conf = &rss},
+        {.type = RTE_FLOW_ACTION_TYPE_COUNT},
         {.type = RTE_FLOW_ACTION_TYPE_END},
     };
 
@@ -606,6 +611,7 @@ static int add_egress_encap_flow(uint8_t port, uint32_t flow_meta, uint32_t out_
          .conf = &decap_raw},
         {.type = RTE_FLOW_ACTION_TYPE_RAW_ENCAP,
          .conf = &encap_raw},
+        {.type = RTE_FLOW_ACTION_TYPE_COUNT},
         {.type = RTE_FLOW_ACTION_TYPE_END},
     };
     flow = rte_flow_create(port, &attr,
@@ -712,6 +718,7 @@ static int add_random_flow(uint8_t port, struct rte_flow_error *error)
              .conf = &decap_raw},
             {.type = RTE_FLOW_ACTION_TYPE_RAW_ENCAP,
              .conf = &encap_raw},
+            {.type = RTE_FLOW_ACTION_TYPE_COUNT},
             {.type = RTE_FLOW_ACTION_TYPE_END},
         };
         flow = rte_flow_create(port, &attr,
