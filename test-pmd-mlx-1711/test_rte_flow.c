@@ -340,7 +340,7 @@ static int add_ingress_jump_flow(uint8_t port, uint32_t sip, uint32_t dip, struc
 }
 
 static int add_ingress_udp_flow(uint8_t port, uint32_t key, uint32_t in_sip, uint32_t in_dip, 
-				uint16_t in_sport, uint16_t in_dport, uint32_t mark,
+				uint16_t in_sport, uint16_t in_dport, uint32_t flow_mark,
 				struct rte_flow_error *error)
 {
 	struct rte_flow *flow = NULL;
@@ -414,8 +414,8 @@ static int add_ingress_udp_flow(uint8_t port, uint32_t key, uint32_t in_sip, uin
 
     struct rte_flow_item_udp i_udp = {
         .hdr = {
-            .src_port = in_sip,
-            .dst_port = in_dip,
+            .src_port = in_sport,
+            .dst_port = in_dport,
         },
     };
     struct rte_flow_item_udp i_udp_mask = {
@@ -426,7 +426,7 @@ static int add_ingress_udp_flow(uint8_t port, uint32_t key, uint32_t in_sip, uin
     };
 
     struct rte_flow_action_mark mark = {
-        .id = mark};
+        .id = flow_mark};
     static struct rte_eth_rss_conf rss_conf = {
         .rss_key = NULL,
         .rss_key_len = 0,
